@@ -8,3 +8,11 @@ updates:
       swiftlang-actions:
         patterns:
           - "swiftlang/github-workflows/*"
+  - package-ecosystem: "swift"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      swift-packages:
+        patterns:
+          - "*"
