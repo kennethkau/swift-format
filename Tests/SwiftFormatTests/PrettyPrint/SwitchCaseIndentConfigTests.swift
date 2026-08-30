@@ -388,4 +388,41 @@ final class SwitchCaseIndentConfigTests: PrettyPrintTestCase {
 
     assertPrettyPrintEqual(input: input, expected: expected, linelength: 80, configuration: config)
   }
+
+  func testIgnoreLastStatementOfCaseKeepsIndentedLabelsBalanced() {
+    let input =
+      """
+      func f(x: Int) {
+        switch x {
+        case 1:
+          a()
+            // swift-format-ignore
+              b()
+          case 2:
+              c()
+        }
+      }
+
+      """
+
+    let expected =
+      """
+      func f(x: Int) {
+        switch x {
+          case 1:
+            a()
+            // swift-format-ignore
+            b()
+          case 2:
+            c()
+        }
+      }
+
+      """
+
+    var config = Configuration.forTesting
+    config.indentSwitchCaseLabels = true
+
+    assertPrettyPrintEqual(input: input, expected: expected, linelength: 80, configuration: config)
+  }
 }

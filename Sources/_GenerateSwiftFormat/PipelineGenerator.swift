@@ -110,7 +110,7 @@ import Foundation
       """
     for ruleName in ruleCollector.allFormatters.map({ $0.typeName }).sorted() {
       result += """
-            node = \(ruleName)(context: context).rewrite(node)
+            node = \(ruleName)(context: context).apply(to: node)
 
         """
     }

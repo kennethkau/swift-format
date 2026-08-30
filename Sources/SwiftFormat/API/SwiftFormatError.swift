@@ -34,6 +34,12 @@ public enum SwiftFormatError: LocalizedError {
   /// The provided configuration version is not supported by this version of the formatter.
   case unsupportedConfigurationVersion(Int, highestSupported: Int)
 
+  /// Formatting did not converge to a fixed point within the allowed number of passes.
+  case formattingDidNotConverge(maximumPasses: Int)
+
+  /// The formatter's own output did not parse during fixpoint iteration.
+  case formatterProducedInvalidSyntax(pass: Int)
+
   public var errorDescription: String? {
     switch self {
     case .fileNotReadable:
@@ -49,6 +55,12 @@ public enum SwiftFormatError: LocalizedError {
     case .unsupportedConfigurationVersion(let version, let highestSupported):
       return
         "This version of the formatter does not support configuration version \(version). The highest supported version is \(highestSupported)."
+    case .formattingDidNotConverge(let maximumPasses):
+      return
+        "Formatting did not converge to a fixed point within \(maximumPasses) passes; this indicates a formatter bug. Please report the input that triggered it. Workaround: set 'iterateToFixpoint' to false."
+    case .formatterProducedInvalidSyntax(let pass):
+      return
+        "The formatter produced invalid Swift during pass \(pass); this indicates a formatter bug. Please report the input that triggered it. Workaround: set 'iterateToFixpoint' to false."
     }
   }
 }

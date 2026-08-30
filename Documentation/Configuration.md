@@ -20,7 +20,7 @@ top-level keys and values:
 ### `lineLength`  
 **type:** number  
 
-**description:** The maximum allowed length of a line, in characters.  
+**description:** The maximum allowed length of a line, in characters. Must be a positive integer.  
 
 **default:** `100`  
 
@@ -41,7 +41,7 @@ top-level keys and values:
 ### `tabWidth`  
 **type:** number  
 
-**description:** The number of spaces that should be considered equivalent to one tab character. This is used during line length calculations when tabs are used for indentation.  
+**description:** The number of spaces that should be considered equivalent to one tab character. This is used during line length calculations when tabs are used for indentation. Must be a positive integer.  
 
 **default:** `8`  
 
@@ -218,6 +218,82 @@ This option takes precedence over `multiElementCollectionTrailingCommas`, unless
 
 ---
 
+### `lineBreakBeforeEachChainComponent`  
+**type:** boolean  
+
+**description:** Determines whether a line break is inserted before every chain component that follows a call — that is, every component whose base is a call or follows one, such as `Text(…).font(…).padding(…)` — unconditionally, even when the whole chain would fit on one line. Components not preceded by a call (for example, plain property accesses like `theme.colors.accent`) are unaffected.  
+
+**default:** `false`  
+
+---
+
+### `attachLoneDeclarationAttributes`  
+**type:** boolean  
+
+**description:** Determines whether a lone declaration attribute shares its declaration's line instead of being placed on its own line. Refines `lineBreakBetweenDeclarationAttributes`: two or more attributes still go one per line, but a single attribute stays attached to its declaration, breaking only when the line length requires it. Has no effect unless declaration attributes are being separated one per line.  
+
+**default:** `false`  
+
+---
+
+### `collectionElementLayout`  
+**type:** `string`
+
+**description:** Determines how elements of collection literals are laid out when the literal spans multiple lines.
+
+- If set to `"binPack"` (the default), a broken literal may pack multiple elements per line, filling each line up to the line length.  
+- If set to `"onePerLine"`, a broken literal places each element on its own line.  
+- If set to `"fillShortLiterals"`, literals made entirely of short simple scalar literals (numbers — including a single leading sign — booleans, `nil`, single-line string literals, and bare enum cases, each at most 10 bytes wide and not preceded by a comment) are packed multiple elements per line; any other literal is laid out one element per line.  
+
+**default:** `"binPack"`  
+
+---
+
+### `magicTrailingComma`  
+**type:** boolean  
+
+**description:** Determines whether a trailing comma after the last element of a comma-delimited list (such as a collection literal, function call argument list, or function parameter list) forces the list to break one element per line, even when the list would fit on a single line — Black's "magic trailing comma" behavior. The comma is only honored when the list fits on the line where it starts; a comma on a list that does not fit there never influences layout. A trailing comma after the sole element of a list is equally magic, and a comma that forced the vertical layout is never removed — except for the sole compactly arranged argument of a call, which never forces the vertical layout.  
+
+**default:** `false`  
+
+---
+
+### `forceBrokenArgumentsInMultilineArrayLiterals`  
+**type:** boolean  
+
+**description:** Determines whether the argument lists of function-call elements in an array literal are broken one argument per line when the array literal itself is laid out vertically. Verticality propagates inward: an element's argument list explodes when the enclosing literal has already broken onto multiple lines by the time the element is printed. Only calls with at least two arguments are affected; a literal that fits on a single line is never affected.  
+
+**default:** `false`  
+
+---
+
+### `forceBrokenClosureBodies`  
+**type:** boolean  
+
+**description:** Determines whether closures containing at least one statement are always laid out vertically — each statement on its own line, with the closing brace on its own line — even when the entire closure would fit on a single line. Covers trailing closures of calls and macro expansions, multiple trailing closures, closure literals, and non-trailing closure arguments. Empty closures are unaffected, and a closure's signature stays attached to its opening brace.  
+
+**default:** `false`  
+
+---
+
+### `forceBrokenCodeBlockBodies`  
+**type:** boolean  
+
+**description:** Determines whether code blocks — the brace-delimited statement bodies of declarations and control-flow statements (functions, initializers, deinitializers, `if`/`else`, `guard`/`else`, `for`, `while`, `repeat`/`while`, `do`/`catch`, and `defer`), the bodies of explicit accessors, and the statement lists of switch cases — are always laid out vertically, even when the entire body would fit on a single line. Type member blocks and implicit single-expression accessors are not code blocks and are unaffected.  
+
+**default:** `false`  
+
+---
+
+### `iterateToFixpoint`  
+**type:** boolean  
+
+**description:** Determines whether formatting iterates until the output stops changing. Rule interactions can occasionally produce output that changes again when formatted a second time; when this setting is true, the formatter repeats the entire format pass — rules and pretty printing — until the output is a fixed point, and fails with an error if it does not converge within a bounded number of passes. Line and offset selections are excluded because their ranges are not valid for the formatted text of later passes, and formatting a pre-parsed syntax tree always performs a single pass. When false (the default), exactly one pass is performed, matching the formatter's existing single-pass behavior.  
+
+**default:** `false`  
+
+---
+
 ### `reflowMultilineStringLiterals`
 
 > [!NOTE]
@@ -309,9 +385,6 @@ too long.
 **default:** `{ "includeConditionalImports" : false, "shouldGroupImports": true }`
 
 ---
-
-> TODO: Add support for enabling/disabling specific syntax transformations in
-> the pipeline.
 
 ### Example
 

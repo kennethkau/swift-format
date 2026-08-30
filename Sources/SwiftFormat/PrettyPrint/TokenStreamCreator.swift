@@ -69,6 +69,11 @@ private final class TokenStreamCreator: SyntaxVisitor {
   /// in a function call containing multiple trailing closures).
   private var forcedBreakingClosures = Set<SyntaxIdentifier>()
 
+  /// Tracks function calls that are array-literal elements whose argument lists must be broken
+  /// one argument per line when the enclosing literal is laid out vertically, registered when
+  /// `forceBrokenArgumentsInMultilineArrayLiterals` is enabled.
+  private var forcedBrokenArrayElementCalls = Set<SyntaxIdentifier>()
+
   /// Tracks whether we last considered ourselves inside the selection
   private var isInsideSelection = true
 
@@ -831,24 +836,41 @@ private final class TokenStreamCreator: SyntaxVisitor {
     before(node.firstToken(viewMode: .sourceAccurate), tokens: openBreak)
 
     after(node.attribute?.lastToken(viewMode: .sourceAccurate), tokens: .space)
-    after(node.label.lastToken(viewMode: .sourceAccurate), tokens: .break(.reset, size: 0), .break(.open), .open)
+    // When `forceBrokenCodeBlockBodies` is enabled, the statements of a case start on their own
+    // line below the case label rather than sharing it; a case with no statements is unaffected.
+    let caseLabelBreak: NewlineBehavior =
+      (config.forceBrokenCodeBlockBodies
+        && node.label.lastToken(viewMode: .sourceAccurate) != node.lastToken(viewMode: .sourceAccurate))
+      ? .soft
+      : .elective
+    after(
+      node.label.lastToken(viewMode: .sourceAccurate),
+      tokens: .break(.reset, size: 0),
+      .break(.open, newlines: caseLabelBreak),
+      .open
+    )
 
     // If switch/case labels were configured to be indented, insert an extra `close` break after
     // the case body to match the `open` break above
-    var afterLastTokenTokens: [Token] = [.break(.close, size: 0), .close]
+    var caseClosingTokens: [Token] = [.break(.close, size: 0), .close]
     if config.indentSwitchCaseLabels {
-      afterLastTokenTokens.append(.break(.close, size: 0))
+      caseClosingTokens.append(.break(.close, size: 0))
     }
 
-    // If the case contains statements, add the closing tokens after the last token of the case.
-    // Otherwise, add the closing tokens before the next case (or the end of the switch) to have the
-    // same effect. If instead the opening and closing tokens were omitted completely in the absence
-    // of statements, comments within the empty case would be incorrectly indented to the same level
-    // as the case label.
-    if node.label.lastToken(viewMode: .sourceAccurate) != node.lastToken(viewMode: .sourceAccurate) {
-      after(node.lastToken(viewMode: .sourceAccurate), tokens: afterLastTokenTokens)
+    // The closing tokens are normally attached after the last token of the case's statements. If
+    // the case has no statements — or its last statement is formatter-ignored, so the last token
+    // is never visited (the statement is emitted as a single verbatim token) and an `after` group
+    // on it would be dropped, leaving the `.open` above unclosed — attach them before the next
+    // case (or the end of the switch) instead, which is always visited. Omitting the opening and
+    // closing tokens entirely in the absence of statements would incorrectly indent comments
+    // within the empty case to the same level as the case label.
+    if let lastToken = node.lastToken(viewMode: .sourceAccurate),
+      node.label.lastToken(viewMode: .sourceAccurate) != lastToken,
+      !isFormatterIgnored(lastToken)
+    {
+      after(lastToken, tokens: caseClosingTokens)
     } else {
-      before(node.nextToken(viewMode: .sourceAccurate), tokens: afterLastTokenTokens)
+      before(node.nextToken(viewMode: .sourceAccurate), tokens: caseClosingTokens)
     }
 
     return .visitChildren
@@ -883,8 +905,7 @@ private final class TokenStreamCreator: SyntaxVisitor {
   }
 
   override func visit(_ node: YieldStmtSyntax) -> SyntaxVisitorContinueKind {
-    // As of https://github.com/swiftlang/swift-syntax/pull/895, the token following a `yield` keyword
-    // *must* be on the same line, so we cannot break here.
+    // The token following a `yield` keyword *must* be on the same line, so we cannot break here.
     after(node.yieldKeyword, tokens: .space)
     return .visitChildren
   }
@@ -962,8 +983,17 @@ private final class TokenStreamCreator: SyntaxVisitor {
   }
 
   override func visit(_ node: ArrayExprSyntax) -> SyntaxVisitorContinueKind {
+    registerArrayCallElementsForBrokenArguments(node.elements)
     if !node.elements.isEmpty || node.rightSquare.hasAnyPrecedingComment {
-      after(node.leftSquare, tokens: .break(.open, size: 0), .open)
+      let magicComma = hasMagicTrailingComma(
+        lastTrailingComma: node.elements.last?.trailingComma
+      )
+      let consistency = collectionElementConsistency(for: node.elements.map(\.expression))
+      after(
+        node.leftSquare,
+        tokens: .break(.open, size: 0, newlines: magicComma ? .commaForced(count: 1) : .elective),
+        .open(magicComma ? .commaForced(base: consistency) : consistency)
+      )
       before(node.rightSquare, tokens: .break(.close, size: 0), .close)
     }
     return .visitChildren
@@ -980,6 +1010,21 @@ private final class TokenStreamCreator: SyntaxVisitor {
       }
     }
 
+    // A registered call element starts on its own line when the literal is vertical; firing the
+    // separator only for width reasons would pack an exploded element after the previous
+    // element's closing delimiter on one pass and move it on the next.
+
+    if config.forceBrokenArgumentsInMultilineArrayLiterals {
+      for element in node.dropFirst() {
+        if isRegisteredForBrokenArguments(element.expression) {
+          before(
+            element.firstToken(viewMode: .sourceAccurate),
+            tokens: .break(.same, size: 0, newlines: .enclosingListForced)
+          )
+        }
+      }
+    }
+
     markCommaDelimitedRegion(node, isCollectionLiteral: true)
     return .visitChildren
   }
@@ -991,11 +1036,20 @@ private final class TokenStreamCreator: SyntaxVisitor {
   override func visit(_ node: DictionaryExprSyntax) -> SyntaxVisitorContinueKind {
     // The node's content is either a `DictionaryElementListSyntax` or a `TokenSyntax` for a colon
     // token (for an empty dictionary).
-    if !(node.content.as(DictionaryElementListSyntax.self)?.isEmpty ?? true)
-      || node.content.hasAnyPrecedingComment
-      || node.rightSquare.hasAnyPrecedingComment
+    let elements = node.content.as(DictionaryElementListSyntax.self)
+    if !(elements?.isEmpty ?? true)
+      || node.content.hasAnyPrecedingComment || node.rightSquare.hasAnyPrecedingComment
     {
-      after(node.leftSquare, tokens: .break(.open, size: 0), .open)
+      let elementExpressions = elements?.flatMap { [$0.key, $0.value] } ?? []
+      let magicComma = hasMagicTrailingComma(
+        lastTrailingComma: elements?.last?.trailingComma
+      )
+      let consistency = collectionElementConsistency(for: elementExpressions)
+      after(
+        node.leftSquare,
+        tokens: .break(.open, size: 0, newlines: magicComma ? .commaForced(count: 1) : .elective),
+        .open(magicComma ? .commaForced(base: consistency) : consistency)
+      )
       before(node.rightSquare, tokens: .break(.close, size: 0), .close)
     }
     return .visitChildren
@@ -1088,7 +1142,8 @@ private final class TokenStreamCreator: SyntaxVisitor {
       arguments,
       leftDelimiter: node.leftParen,
       rightDelimiter: node.rightParen,
-      forcesBreakBeforeRightDelimiter: breakBeforeRightParen
+      forcesBreakBeforeRightDelimiter: breakBeforeRightParen,
+      propagatesEnclosingListBreak: forcedBrokenArrayElementCalls.remove(node.id) != nil
     )
 
     return .visitChildren
@@ -1114,22 +1169,51 @@ private final class TokenStreamCreator: SyntaxVisitor {
   ///   - leftDelimiter: The left parenthesis or bracket surrounding the arguments, if any.
   ///   - rightDelimiter: The right parenthesis or bracket surrounding the arguments, if any.
   ///   - forcesBreakBeforeRightDelimiter: True if a line break should be forced before the right
-  ///     right delimiter if a line break occurred after the left delimiter, or false if the right
-  ///     delimiter is allowed to hang on the same line as the final argument. # ignore-unacceptable-language
+  ///     delimiter if a line break occurred after the left delimiter, or false if the right
+  ///     delimiter is allowed to hang on the same line as the final argument.
+  ///   - propagatesEnclosingListBreak: True if the argument list should be broken one argument
+  ///     per line when the enclosing comma-delimited list is laid out vertically. Only takes
+  ///     effect when the argument list is grouped.
   private func arrangeFunctionCallArgumentList(
     _ arguments: LabeledExprListSyntax,
     leftDelimiter: TokenSyntax?,
     rightDelimiter: TokenSyntax?,
-    forcesBreakBeforeRightDelimiter: Bool
+    forcesBreakBeforeRightDelimiter: Bool,
+    propagatesEnclosingListBreak: Bool = false
   ) {
     if !arguments.isEmpty {
-      var afterLeftDelimiter: [Token] = [.break(.open, size: 0)]
+      let magicComma = hasMagicTrailingComma(
+        lastTrailingComma: arguments.last?.trailingComma
+      )
+      let groupsArgumentList = shouldGroupAroundArgumentList(arguments)
+      // A magic trailing comma breaks the list one argument per line at print time, when the list
+      // fits on the line where it starts; verticality propagation does so when the enclosing list
+      // is multiline, also at print time. When both apply, the comma takes precedence.
+      let commaForcesOpen = magicComma && groupsArgumentList
+      let enclosingListForcesOpen =
+        propagatesEnclosingListBreak && groupsArgumentList && !commaForcesOpen
+      var afterLeftDelimiter: [Token] = [
+        .break(
+          .open,
+          size: 0,
+          newlines: commaForcesOpen
+            ? .commaForced(count: 1)
+            : (enclosingListForcesOpen ? .enclosingListForced : .elective)
+        )
+      ]
       var beforeRightDelimiter: [Token] = [
         .break(.close(mustBreak: forcesBreakBeforeRightDelimiter), size: 0)
       ]
 
-      if shouldGroupAroundArgumentList(arguments) {
-        afterLeftDelimiter.append(.open(argumentListConsistency()))
+      if groupsArgumentList {
+        let consistency = argumentListConsistency()
+        afterLeftDelimiter.append(
+          .open(
+            commaForcesOpen
+              ? .commaForced(base: consistency)
+              : (enclosingListForcesOpen ? .enclosingListForced(base: consistency) : consistency)
+          )
+        )
         beforeRightDelimiter.append(.close)
       }
 
@@ -1190,7 +1274,12 @@ private final class TokenStreamCreator: SyntaxVisitor {
 
   override func visit(_ node: ClosureExprSyntax) -> SyntaxVisitorContinueKind {
     let newlineBehavior: NewlineBehavior
-    if forcedBreakingClosures.remove(node.id) != nil || node.statements.count > 1 {
+    // Closures with multiple statements (or in calls with multiple trailing closures) always
+    // break open; `forceBrokenClosureBodies` extends that to single-statement closures. Empty
+    // closures have nothing to break open, so they are left alone.
+    if forcedBreakingClosures.remove(node.id) != nil || node.statements.count > 1
+      || (config.forceBrokenClosureBodies && !node.statements.isEmpty)
+    {
       newlineBehavior = .soft
     } else {
       newlineBehavior = .elective
@@ -1340,8 +1429,34 @@ private final class TokenStreamCreator: SyntaxVisitor {
     // TODO: For now, just use the raw text of the node and don't try to format it deeper. In the
     // future, we should find a way to format the expression but without wrapping so that at least
     // internal whitespace is fixed.
-    appendToken(.syntax(node.description))
-    // Visiting children is not needed here.
+    let text = node.description
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+
+    // An interpolation that spans multiple lines still has the indentation it had in the original
+    // source. The rest of the multiline string is re-indented by the pretty printer, so emitting
+    // the raw text would leave these lines behind, and a line less indented than the closing
+    // delimiter doesn't compile. Emit each line separately instead, dropping the literal's original
+    // indentation so the printer can apply the new one.
+    guard lines.count > 1,
+      let stringLiteral = node.parent?.as(StringLiteralSegmentListSyntax.self)?.parent?
+        .as(StringLiteralExprSyntax.self),
+      stringLiteral.openingQuote.tokenKind == .multilineStringQuote
+    else {
+      appendToken(.syntax(text))
+      return .skipChildren
+    }
+
+    let originalIndentation = stringLiteral.closingQuote.leadingTrivia.reversed()
+      .prefix { $0.isSpaceOrTab }
+      .reduce(0) { $0 + $1.sourceLength.utf8Length }
+    let breakKind = pendingMultilineStringBreakKinds[stringLiteral, default: .same]
+
+    appendToken(.syntax(String(lines[0])))
+    for line in lines.dropFirst() {
+      let strippableWhitespace = line.prefix { $0 == " " || $0 == "\t" }.count
+      appendToken(.break(breakKind, newlines: .hard(count: 1)))
+      appendToken(.syntax(String(line.dropFirst(min(originalIndentation, strippableWhitespace)))))
+    }
     return .skipChildren
   }
 
@@ -2083,7 +2198,9 @@ private final class TokenStreamCreator: SyntaxVisitor {
     before(
       node.colon,
       tokens: .break(.close(mustBreak: false), size: 0),
-      .break(.open(kind: .continuation)),
+      // A user may place a discretionary newline before the colon, but preserving it should not
+      // force the question-mark break on an otherwise fitting ternary expression.
+      .break(.open(kind: .continuation), newlines: .electiveIgnoringGroupLength),
       .open
     )
     after(node.colon, tokens: .space)
@@ -2140,7 +2257,7 @@ private final class TokenStreamCreator: SyntaxVisitor {
     if node.name.tokenKind == .keyword(.async) {
       breakOrSpace = .space
     } else {
-      breakOrSpace = .break
+      breakOrSpace = .break(.same)
     }
     after(node.lastToken(viewMode: .sourceAccurate), tokens: breakOrSpace)
     return .visitChildren
@@ -3176,7 +3293,20 @@ private final class TokenStreamCreator: SyntaxVisitor {
     }
     if !suppressFinalBreak {
       let endsWithIfConfig = attributes.last?.is(IfConfigDeclSyntax.self) ?? false
-      afterAttributeTokens.append(endsWithIfConfig ? .break(.same, newlines: .hard) : lineBreak)
+      if endsWithIfConfig {
+        afterAttributeTokens.append(.break(.same, newlines: .hard))
+      } else if attributes.count == 1, config.attachLoneDeclarationAttributes,
+        case .break(let kind, let size, .hard) = lineBreak
+      {
+        // With `attachLoneDeclarationAttributes`, a lone attribute stays attached to its
+        // declaration's line, so the break after it is a last resort that fires only when the
+        // line length requires it and discards any discretionary newline in the source.
+        afterAttributeTokens.append(
+          .break(kind, size: size, newlines: .elective(ignoresDiscretionary: true))
+        )
+      } else {
+        afterAttributeTokens.append(lineBreak)
+      }
     }
     if !afterAttributeTokens.isEmpty {
       after(attributes.lastToken(viewMode: .sourceAccurate), tokens: afterAttributeTokens)
@@ -3269,7 +3399,7 @@ private final class TokenStreamCreator: SyntaxVisitor {
   ) {
     guard !parameters.parameters.isEmpty else { return }
 
-    after(parameters.leftParen, tokens: .break(.open, size: 0), .open(argumentListConsistency()))
+    after(parameters.leftParen, tokens: parameterListOpenTokens(parameters.parameters))
     before(
       parameters.rightParen,
       tokens: .break(.close(mustBreak: forcesBreakBeforeRightParen), size: 0),
@@ -3290,7 +3420,7 @@ private final class TokenStreamCreator: SyntaxVisitor {
   ) {
     guard !parameters.parameters.isEmpty else { return }
 
-    after(parameters.leftParen, tokens: .break(.open, size: 0), .open(argumentListConsistency()))
+    after(parameters.leftParen, tokens: parameterListOpenTokens(parameters.parameters))
     before(
       parameters.rightParen,
       tokens: .break(.close(mustBreak: forcesBreakBeforeRightParen), size: 0),
@@ -3311,7 +3441,7 @@ private final class TokenStreamCreator: SyntaxVisitor {
   ) {
     guard !parameters.parameters.isEmpty else { return }
 
-    after(parameters.leftParen, tokens: .break(.open, size: 0), .open(argumentListConsistency()))
+    after(parameters.leftParen, tokens: parameterListOpenTokens(parameters.parameters))
     before(
       parameters.rightParen,
       tokens: .break(.close(mustBreak: forcesBreakBeforeRightParen), size: 0),
@@ -3339,6 +3469,20 @@ private final class TokenStreamCreator: SyntaxVisitor {
     openBraceNewlineBehavior: NewlineBehavior = .elective
   ) where BodyContents.Element: SyntaxProtocol {
     guard let node = node, let contentsKeyPath = contentsKeyPath else { return }
+
+    // `forceBrokenCodeBlockBodies` breaks open the brace-delimited statement bodies of functions
+    // and control-flow statements — identified by the node being a code block — even when the
+    // body would fit on a single line. Other braced constructs routed through this method
+    // (closures, which supply their own behavior, and member blocks) are not code blocks and are
+    // unaffected.
+    var openBraceNewlineBehavior = openBraceNewlineBehavior
+    if case .elective = openBraceNewlineBehavior,
+      config.forceBrokenCodeBlockBodies,
+      Syntax(node).is(CodeBlockSyntax.self),
+      !areBracesCompletelyEmpty(node, contentsKeyPath: contentsKeyPath)
+    {
+      openBraceNewlineBehavior = .soft
+    }
 
     if shouldResetBeforeLeftBrace {
       before(
@@ -3459,6 +3603,119 @@ private final class TokenStreamCreator: SyntaxVisitor {
     return config.lineBreakBeforeEachGenericRequirement ? .consistent : .inconsistent
   }
 
+  /// The maximum printed width, in bytes, of an element that may be considered a "short" scalar
+  /// literal in `fillShortLiterals` collection element layout, matching rustfmt's
+  /// `short_array_element_width_threshold` default.
+  private static let shortScalarLiteralWidthLimit = 10
+
+  /// Returns the group consistency that should be used for collection literal element lists,
+  /// based on the user's current configuration and the contents of the list.
+  ///
+  /// The elements are an autoclosure because building the list allocates; it is only evaluated
+  /// in `fillShortLiterals` mode, so the other modes pay nothing.
+  private func collectionElementConsistency(for elements: @autoclosure () -> [ExprSyntax]) -> GroupBreakStyle {
+    switch config.collectionElementLayout {
+    case .binPack: return .inconsistent
+    case .onePerLine: return .consistent
+    case .fillShortLiterals:
+      return elements().allSatisfy(isShortScalarLiteral) ? .inconsistent : .consistent
+    }
+  }
+
+  /// Returns whether the given expression is a simple scalar literal whose printed width is at
+  /// most `Self.shortScalarLiteralWidthLimit` bytes and which has no preceding comments, making
+  /// it suitable for packing multiple elements per line in `fillShortLiterals` layout mode.
+  private func isShortScalarLiteral(_ expression: ExprSyntax) -> Bool {
+    // Comments between elements cannot be packed into filled rows predictably.
+    if expression.hasAnyPrecedingComment {
+      return false
+    }
+    guard expression.trimmedDescription.utf8.count <= Self.shortScalarLiteralWidthLimit else {
+      return false
+    }
+    switch Syntax(expression).as(SyntaxEnum.self) {
+    case .integerLiteralExpr, .floatLiteralExpr, .booleanLiteralExpr, .nilLiteralExpr:
+      return true
+    case .prefixOperatorExpr(let prefixOperator):
+      // A signed number (e.g. `-1`) is still a scalar literal; the width check above counted
+      // the sign. Only a single sign wrapping an unsigned numeric literal qualifies.
+      let sign = prefixOperator.operator.text
+      guard sign == "-" || sign == "+" else {
+        return false
+      }
+      switch Syntax(prefixOperator.expression).as(SyntaxEnum.self) {
+      case .integerLiteralExpr, .floatLiteralExpr:
+        return true
+      default:
+        return false
+      }
+    case .stringLiteralExpr(let stringLiteral):
+      // Multiline strings can never be packed onto shared lines.
+      return stringLiteral.openingQuote.tokenKind != .multilineStringQuote
+    case .memberAccessExpr(let memberAccess):
+      // Only leading-dot enum cases (e.g. `.red`) qualify; property chains have a base
+      // expression.
+      return memberAccess.base == nil
+    default: return false
+    }
+  }
+
+  /// Returns the newline behavior for a break before a chain component's period. The break is
+  /// forced when `lineBreakBeforeEachChainComponent` is enabled and the component follows a call
+  /// — that is, its base is a call or itself follows one — and is elective otherwise.
+  private func chainComponentNewlineBehavior(followsCall: Bool) -> NewlineBehavior {
+    return (config.lineBreakBeforeEachChainComponent && followsCall) ? .soft : .elective
+  }
+
+  /// Determines whether a trailing comma after the last element of a list is a candidate for the
+  /// "magic" trailing comma behavior (see `magicTrailingComma`). A single-element list qualifies
+  /// too, matching Black: `[foo,]` is the author's vertical-layout signal. Callers that exempt a
+  /// compactly arranged sole call argument do not consult this helper's verdict.
+  private func hasMagicTrailingComma(lastTrailingComma: TokenSyntax?) -> Bool {
+    return config.magicTrailingComma && lastTrailingComma != nil
+  }
+
+  /// Registers the function-call elements of an array literal whose argument lists must be broken
+  /// one argument per line when the enclosing literal is laid out vertically, when
+  /// `forceBrokenArgumentsInMultilineArrayLiterals` is enabled. Only calls with at least two
+  /// arguments are registered.
+  private func registerArrayCallElementsForBrokenArguments(_ elements: ArrayElementListSyntax) {
+    guard config.forceBrokenArgumentsInMultilineArrayLiterals else {
+      return
+    }
+    for element in elements {
+      guard let call = element.expression.as(FunctionCallExprSyntax.self),
+        call.arguments.count >= 2
+      else {
+        continue
+      }
+      forcedBrokenArrayElementCalls.insert(call.id)
+    }
+  }
+
+  /// Returns whether the given expression is a function-call array element that is registered to
+  /// have its argument list broken one argument per line when the enclosing literal is vertical.
+  /// Registration only ever contains calls with at least two arguments.
+  private func isRegisteredForBrokenArguments(_ expression: ExprSyntax) -> Bool {
+    guard let call = expression.as(FunctionCallExprSyntax.self) else {
+      return false
+    }
+    return forcedBrokenArrayElementCalls.contains(call.id)
+  }
+
+  /// Returns the tokens emitted after a parameter clause's left parenthesis, honoring a magic
+  /// trailing comma after the last parameter.
+  private func parameterListOpenTokens<Parameters: SyntaxCollection>(
+    _ parameters: Parameters
+  ) -> [Token] where Parameters.Element: WithTrailingCommaSyntax {
+    let magicComma = hasMagicTrailingComma(lastTrailingComma: parameters.last?.trailingComma)
+    let consistency = argumentListConsistency()
+    return [
+      .break(.open, size: 0, newlines: magicComma ? .commaForced(count: 1) : .elective),
+      .open(magicComma ? .commaForced(base: consistency) : consistency),
+    ]
+  }
+
   private func afterTokensForTrailingComment(
     _ token: TokenSyntax
   ) -> (isLineComment: Bool, tokens: [Token]) {
@@ -3543,6 +3800,44 @@ private final class TokenStreamCreator: SyntaxVisitor {
     return (trailingTrivia[..<pivot], trailingTrivia[pivot...])
   }
 
+  /// Appends the separator space required by an end-of-line comment if the comment is being
+  /// pulled up onto the current line.
+  ///
+  /// A comment is being pulled up when nothing between it and the preceding text guarantees
+  /// separation: a break carrying real newlines puts the comment on a line of its own, and a
+  /// conditional break or space with positive size separates the comment from the preceding text
+  /// whether or not it fires. Group markers and printer controls emit nothing, so they are
+  /// skipped; if text is reached with no separation in between, the comment would be glued to it.
+  private func appendSeparatorIfPulledUpToEndOfLine(spaces: Int) {
+    var index = tokens.count - 1
+    while index >= 0 {
+      switch tokens[index] {
+      case .break(_, let size, let newlines):
+        switch newlines {
+        case .soft, .softIgnoringGroupLength, .hard:
+          // The break carries real newlines; the comment will start on its own line.
+          return
+        case .elective, .electiveIgnoringGroupLength, .escaped, .commaForced, .enclosingListForced:
+          // The break fires only conditionally; if it does not fire, its size provides the
+          // separation.
+          if size > 0 { return }
+        }
+      case .space(let size, _):
+        if size > 0 { return }
+      case .syntax, .comment, .verbatim:
+        appendToken(.space(size: spaces, flexible: true))
+        return
+      case .open, .close, .printerControl, .commaDelimitedRegionStart, .commaDelimitedRegionEnd,
+        .contextualBreakingStart, .contextualBreakingEnd, .enableFormatting, .disableFormatting:
+        // Markers and controls emit nothing themselves; keep scanning.
+        break
+      }
+      index -= 1
+    }
+    // The stream ran out before any text was found: the comment begins the file and needs no
+    // separator.
+  }
+
   private func extractLeadingTrivia(_ token: TokenSyntax) {
     var isStartOfFile: Bool
     let trivia: Trivia
@@ -3589,6 +3884,13 @@ private final class TokenStreamCreator: SyntaxVisitor {
       case .lineComment(let text):
         if index > 0 || isStartOfFile {
           generateEnableFormattingIfNecessary(position..<position + piece.sourceLength)
+          // If the newline(s) preceding this comment were discarded (for example, because
+          // discretionary line breaks are not being respected), the comment is being pulled up
+          // to the end of the current line and must be separated from the preceding token like
+          // any other end-of-line comment. Without this, formatting is not idempotent: the
+          // second pass sees the comment in the previous token's trailing trivia and inserts
+          // the separator that the first pass missed.
+          appendSeparatorIfPulledUpToEndOfLine(spaces: config.spacesBeforeEndOfLineComments)
           appendToken(.comment(Comment(kind: .line, leadingIndent: leadingIndent, text: text), wasEndOfLine: false))
           generateDisableFormattingIfNecessary(position + piece.sourceLength)
           appendNewlines(.soft)
@@ -3601,6 +3903,10 @@ private final class TokenStreamCreator: SyntaxVisitor {
         if index > 0 || isStartOfFile {
           let isStandaloneLeadingComment = leadingIndent != nil || isStartOfFile
           generateEnableFormattingIfNecessary(position..<position + piece.sourceLength)
+          // Pulled-up block comments need a separating space for the same reason as pulled-up
+          // line comments above; one space matches the trailing-trivia path in
+          // `afterTokensForTrailingComment`.
+          appendSeparatorIfPulledUpToEndOfLine(spaces: 1)
           appendToken(.comment(Comment(kind: .block, leadingIndent: leadingIndent, text: text), wasEndOfLine: false))
           generateDisableFormattingIfNecessary(position + piece.sourceLength)
           // There is always a break after the comment to allow a discretionary newline after it.
@@ -3648,7 +3954,15 @@ private final class TokenStreamCreator: SyntaxVisitor {
         guard !isStartOfFile else { break }
 
         if requiresNextNewline || (config.respectsExistingLineBreaks && isDiscretionaryNewlineAllowed(before: token)) {
-          appendNewlines(.soft(count: count, discretionary: true))
+          let newlines: NewlineBehavior
+          if !token.leadingTrivia.hasAnyComments,
+            shouldPreserveNewlineWithoutForcingEarlierBreaks(before: token)
+          {
+            newlines = .softIgnoringGroupLength(count: count, discretionary: true)
+          } else {
+            newlines = .soft(count: count, discretionary: true)
+          }
+          appendNewlines(newlines)
         } else {
           // Even if discretionary line breaks are not being respected, we still respect multiple
           // line breaks in order to keep blank separator lines that the user might want.
@@ -3731,6 +4045,17 @@ private final class TokenStreamCreator: SyntaxVisitor {
       return foundBreakFirst
     }
     return isBreakMoreRecentThanNonbreakingContent(tokens) ?? true
+  }
+
+  /// Returns whether a discretionary newline before `token` should be retained without affecting
+  /// the enclosing groups' layout decisions.
+  private func shouldPreserveNewlineWithoutForcingEarlierBreaks(before token: TokenSyntax) -> Bool {
+    return beforeMap[token]?.contains {
+      if case .break(_, _, .electiveIgnoringGroupLength) = $0 {
+        return true
+      }
+      return false
+    } ?? false
   }
 
   /// Appends the newlines to the token stream.
@@ -4301,24 +4626,30 @@ private final class TokenStreamCreator: SyntaxVisitor {
   private func insertContextualBreaks(
     _ expr: ExprSyntax,
     isTopLevel: Bool
-  ) -> (hasCompoundExpression: Bool, hasMemberAccess: Bool) {
+  ) -> (hasCompoundExpression: Bool, hasMemberAccess: Bool, followsCall: Bool) {
     preVisitedExprs.insert(expr.id)
     if let memberAccessExpr = expr.as(MemberAccessExprSyntax.self) {
       // When the member access is part of a calling expression, the break before the dot is
       // inserted when visiting the parent node instead so that the break is inserted before any
       // scoping tokens (e.g. `contextualBreakingStart`, `open`).
-      if memberAccessExpr.base != nil && expr.parent?.isProtocol(CallingExprSyntaxProtocol.self) != true {
-        before(memberAccessExpr.period, tokens: .break(.contextual, size: 0))
-      }
+      // Visit the base first so we know whether this component follows a call before choosing
+      // the break's behavior.
       var hasCompoundExpression = false
+      var followsCall = false
       if let base = memberAccessExpr.base {
-        (hasCompoundExpression, _) = insertContextualBreaks(base, isTopLevel: false)
+        (hasCompoundExpression, _, followsCall) = insertContextualBreaks(base, isTopLevel: false)
+      }
+      if memberAccessExpr.base != nil && expr.parent?.isProtocol(CallingExprSyntaxProtocol.self) != true {
+        before(
+          memberAccessExpr.period,
+          tokens: .break(.contextual, size: 0, newlines: chainComponentNewlineBehavior(followsCall: followsCall))
+        )
       }
       if isTopLevel {
         before(expr.firstToken(viewMode: .sourceAccurate), tokens: .contextualBreakingStart)
         after(expr.lastToken(viewMode: .sourceAccurate), tokens: .contextualBreakingEnd)
       }
-      return (hasCompoundExpression, true)
+      return (hasCompoundExpression, true, followsCall)
     } else if let postfixIfExpr = expr.as(PostfixIfConfigExprSyntax.self),
       let base = postfixIfExpr.base
     {
@@ -4338,7 +4669,7 @@ private final class TokenStreamCreator: SyntaxVisitor {
       return insertContextualBreaks(base, isTopLevel: false)
     } else if let callingExpr = expr.asProtocol(CallingExprSyntaxProtocol.self) {
       let calledExpression = callingExpr.calledExpression
-      let (hasCompoundExpression, hasMemberAccess) =
+      let (hasCompoundExpression, hasMemberAccess, followsCall) =
         insertContextualBreaks(calledExpression, isTopLevel: false)
 
       let shouldGroup =
@@ -4351,10 +4682,11 @@ private final class TokenStreamCreator: SyntaxVisitor {
 
       if let calledMemberAccessExpr = calledExpression.as(MemberAccessExprSyntax.self) {
         if calledMemberAccessExpr.base != nil {
+          let newlines = chainComponentNewlineBehavior(followsCall: followsCall)
           if isNestedInPostfixIfConfig(node: Syntax(calledMemberAccessExpr)) {
-            before(calledMemberAccessExpr.period, tokens: [.break(.same, size: 0)])
+            before(calledMemberAccessExpr.period, tokens: [.break(.same, size: 0, newlines: newlines)])
           } else {
-            before(calledMemberAccessExpr.period, tokens: [.break(.contextual, size: 0)])
+            before(calledMemberAccessExpr.period, tokens: [.break(.contextual, size: 0, newlines: newlines)])
           }
         }
         before(calledMemberAccessExpr.period, tokens: beforeTokens)
@@ -4367,7 +4699,7 @@ private final class TokenStreamCreator: SyntaxVisitor {
         before(expr.firstToken(viewMode: .sourceAccurate), tokens: beforeTokens)
         after(expr.lastToken(viewMode: .sourceAccurate), tokens: afterTokens)
       }
-      return (true, hasMemberAccess)
+      return (true, hasMemberAccess, true)
     }
 
     // Otherwise, it's an expression that isn't calling another expression (e.g. array or
@@ -4376,7 +4708,47 @@ private final class TokenStreamCreator: SyntaxVisitor {
     before(expr.firstToken(viewMode: .sourceAccurate), tokens: .contextualBreakingStart)
     after(expr.lastToken(viewMode: .sourceAccurate), tokens: .contextualBreakingEnd)
     let hasCompoundExpression = !expr.is(DeclReferenceExprSyntax.self)
-    return (hasCompoundExpression, false)
+    return (hasCompoundExpression, false, isCallRooted(expr))
+  }
+
+  /// Returns whether the leftmost component of the given expression — looking through
+  /// optional-chaining, force-unwrap, keyword-modifier (`try`, `await`, `unsafe`), and
+  /// parenthesized wrappers, and member accesses — is a calling expression (a function call or
+  /// subscript). This lets a component following a wrapped or extended call (e.g. the `.bar` in
+  /// `foo()?.bar` or the `.baz` in `foo().bar?.baz`) count as following a call.
+  ///
+  /// Only an unlabeled, comma-less sole element counts as a parenthesized wrapper; a labeled or
+  /// trailing-comma single-element tuple is a genuine tuple, and member accesses on it are tuple
+  /// accesses rather than chain components.
+  private func isCallRooted(_ expr: ExprSyntax) -> Bool {
+    if let optionalChainingExpr = expr.as(OptionalChainingExprSyntax.self) {
+      return isCallRooted(optionalChainingExpr.expression)
+    }
+    if let forceUnwrapExpr = expr.as(ForceUnwrapExprSyntax.self) {
+      return isCallRooted(forceUnwrapExpr.expression)
+    }
+    if let tryExpr = expr.as(TryExprSyntax.self) {
+      return isCallRooted(tryExpr.expression)
+    }
+    if let awaitExpr = expr.as(AwaitExprSyntax.self) {
+      return isCallRooted(awaitExpr.expression)
+    }
+    if let unsafeExpr = expr.as(UnsafeExprSyntax.self) {
+      return isCallRooted(unsafeExpr.expression)
+    }
+    if let tupleExpr = expr.as(TupleExprSyntax.self), tupleExpr.elements.count == 1,
+      let onlyElement = tupleExpr.elements.first, onlyElement.label == nil,
+      onlyElement.trailingComma == nil
+    {
+      return isCallRooted(onlyElement.expression)
+    }
+    // A member access passes the call through: the leftmost component of `foo().bar` is still
+    // `foo()`, so a component following it (e.g. the `.baz` in `foo().bar?.baz`) follows a call
+    // just like the `.bar` does.
+    if let memberAccessExpr = expr.as(MemberAccessExprSyntax.self), let base = memberAccessExpr.base {
+      return isCallRooted(base)
+    }
+    return expr.isProtocol(CallingExprSyntaxProtocol.self)
   }
 
   /// Marks a comma-delimited region for the given list, inserting start/end tokens
@@ -4646,6 +5018,15 @@ extension NewlineBehavior {
       // `lhs` is either also elective or a required newline, which overwrites elective.
       return lhs
 
+    case (.electiveIgnoringGroupLength, .soft(let count, let discretionary)):
+      return .softIgnoringGroupLength(count: count, discretionary: discretionary)
+    case (.electiveIgnoringGroupLength, .electiveIgnoringGroupLength):
+      return .electiveIgnoringGroupLength
+    case (.electiveIgnoringGroupLength, _):
+      return rhs
+    case (_, .electiveIgnoringGroupLength):
+      return lhs
+
     case (.escaped, _):
       return rhs
     case (_, .escaped):
@@ -4663,9 +5044,67 @@ extension NewlineBehavior {
       }
       return .soft(count: mergedCount, discretionary: lhsDiscretionary || rhsDiscretionary)
 
+    case (.softIgnoringGroupLength(let count, let discretionary), .soft(let rhsCount, let rhsDiscretionary)),
+      (.soft(let rhsCount, let rhsDiscretionary), .softIgnoringGroupLength(let count, let discretionary)):
+      return .softIgnoringGroupLength(
+        count: max(count, rhsCount),
+        discretionary: discretionary || rhsDiscretionary
+      )
+    case (
+      .softIgnoringGroupLength(let lhsCount, let lhsDiscretionary),
+      .softIgnoringGroupLength(let rhsCount, let rhsDiscretionary)
+    ):
+      return .softIgnoringGroupLength(
+        count: max(lhsCount, rhsCount),
+        discretionary: lhsDiscretionary || rhsDiscretionary
+      )
+
     case (.soft(let softCount, _), .hard(let hardCount)),
       (.hard(let hardCount), .soft(let softCount, _)):
       return .hard(count: max(softCount, hardCount))
+
+    case (.softIgnoringGroupLength(let softCount, _), .hard(let hardCount)),
+      (.hard(let hardCount), .softIgnoringGroupLength(let softCount, _)):
+      return .hard(count: max(softCount, hardCount))
+
+    case (.commaForced(let lhsCount), .commaForced(let rhsCount)):
+      return .commaForced(count: max(lhsCount, rhsCount))
+
+    // A required newline (e.g. a discretionary newline from the source after the opening
+    // delimiter) does not subsume the comma-forced decision: the break still applies its magic
+    // semantics only when the list fits on its line, so the comma keeps its power regardless of
+    // how the source was line-wrapped.
+    case (.commaForced(let commaCount), .soft(let softCount, _)),
+      (.soft(let softCount, _), .commaForced(let commaCount)),
+      (.commaForced(let commaCount), .softIgnoringGroupLength(let softCount, _)),
+      (.softIgnoringGroupLength(let softCount, _), .commaForced(let commaCount)):
+      return .commaForced(count: max(commaCount, softCount))
+
+    case (.commaForced, .hard(let count)), (.hard(let count), .commaForced):
+      return .hard(count: count)
+
+    case (.enclosingListForced, .enclosingListForced):
+      return .enclosingListForced
+
+    // A required newline (e.g. a discretionary newline from the source) is never dropped by the
+    // propagation decision: the author's line break keeps the list vertical, so propagation
+    // still applies to any registered sibling lists.
+    case (.enclosingListForced, .soft(let count, let discretionary)),
+      (.soft(let count, let discretionary), .enclosingListForced):
+      return .soft(count: count, discretionary: discretionary)
+
+    case (.enclosingListForced, .softIgnoringGroupLength(let count, let discretionary)),
+      (.softIgnoringGroupLength(let count, let discretionary), .enclosingListForced):
+      return .softIgnoringGroupLength(count: count, discretionary: discretionary)
+
+    case (.enclosingListForced, .hard(let count)), (.hard(let count), .enclosingListForced):
+      return .hard(count: count)
+
+    // When both a magic trailing comma and verticality propagation apply to adjacent breaks, the
+    // author's comma signal takes precedence.
+    case (.commaForced(let commaCount), .enclosingListForced),
+      (.enclosingListForced, .commaForced(let commaCount)):
+      return .commaForced(count: commaCount)
 
     case (.hard(let lhsCount), .hard(let rhsCount)):
       return .hard(count: lhsCount + rhsCount)

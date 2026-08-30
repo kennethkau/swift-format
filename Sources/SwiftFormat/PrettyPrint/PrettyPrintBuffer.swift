@@ -77,15 +77,23 @@ struct PrettyPrintBuffer {
   mutating func writeNewlines(_ newlines: NewlineBehavior, shouldIndentBlankLines: Bool) {
     let numberToPrint: Int
     switch newlines {
-    case .elective:
+    case .elective, .electiveIgnoringGroupLength:
       numberToPrint = consecutiveNewlineCount == 0 ? 1 : 0
-    case .soft(let count, _):
+    case .soft(let count, _), .softIgnoringGroupLength(let count, _):
       // We add 1 to the max blank lines because it takes 2 newlines to create the first blank line.
       numberToPrint = min(count, maximumBlankLines + 1) - consecutiveNewlineCount
     case .hard(let count):
       numberToPrint = count
     case .escaped:
       numberToPrint = 1
+    case .commaForced(let count):
+      // A comma-forced break writes the newlines it accumulated (a single formatter-created
+      // newline, or the author's merged line breaks), capped by the blank-line limit like a
+      // non-discretionary soft newline.
+      numberToPrint = min(count, maximumBlankLines + 1) - consecutiveNewlineCount
+    case .enclosingListForced:
+      // A propagated-verticality break likewise writes a single formatter-created newline.
+      numberToPrint = min(1, maximumBlankLines + 1) - consecutiveNewlineCount
     }
 
     guard numberToPrint > 0 else { return }

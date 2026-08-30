@@ -55,24 +55,22 @@ func parseAndEmitDiagnostics(
     operatorTable.foldAll(Parser.parse(source: sourceBytes, languageFeatures: experimentalFeaturesSet)) { _ in }
       .as(SourceFileSyntax.self)!
   }
-  let diagnostics = ParseDiagnosticsGenerator.diagnostics(for: sourceFile)
-  var hasErrors = false
+  let diagnostics = ParseDiagnosticsGenerator.diagnostics(for: sourceFile).filter {
+    // Ignore editor placeholders, because it is useful to support formatting
+    // in-progress files that contain those.
+    $0.diagnosticID != StaticTokenError.editorPlaceholder.diagnosticID
+  }
   if let parsingDiagnosticHandler = parsingDiagnosticHandler {
     let expectedConverter =
       SourceLocationConverter(fileName: url?.path ?? "<unknown>", tree: sourceFile)
     for diagnostic in diagnostics {
-      let location = diagnostic.location(converter: expectedConverter)
-
-      // Ignore editor placeholders, because it is useful to support formatting
-      // in-progress files that contain those.
-      if diagnostic.diagnosticID != StaticTokenError.editorPlaceholder.diagnosticID {
-        parsingDiagnosticHandler(diagnostic, location)
-        hasErrors = true
-      }
+      parsingDiagnosticHandler(diagnostic, diagnostic.location(converter: expectedConverter))
     }
   }
 
-  guard !hasErrors else {
+  // Validation must not depend on a handler being installed: text that does not parse is never
+  // formatted, whoever called.
+  guard diagnostics.isEmpty else {
     throw SwiftFormatError.fileContainsInvalidSyntax
   }
   return sourceFile

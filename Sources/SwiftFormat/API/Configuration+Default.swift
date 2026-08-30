@@ -32,6 +32,8 @@ extension Configuration {
     self.lineBreakBeforeEachArgument = false
     self.lineBreakBeforeEachGenericRequirement = false
     self.lineBreakBetweenDeclarationAttributes = false
+    self.lineBreakBeforeEachChainComponent = false
+    self.attachLoneDeclarationAttributes = false
     self.prioritizeKeepingFunctionOutputTogether = false
     self.indentConditionalCompilationBlocks = true
     self.lineBreakAroundMultilineExpressionChainComponents = false
@@ -41,9 +43,15 @@ extension Configuration {
     self.noAssignmentInExpressions = NoAssignmentInExpressionsConfiguration()
     self.multilineTrailingCommaBehavior = .keptAsWritten
     self.multiElementCollectionTrailingCommas = true
+    self.collectionElementLayout = .binPack
+    self.magicTrailingComma = false
+    self.forceBrokenArgumentsInMultilineArrayLiterals = false
+    self.forceBrokenClosureBodies = false
+    self.forceBrokenCodeBlockBodies = false
     self.reflowMultilineStringLiterals = .never
     self.indentBlankLines = false
     self.orderedImports = OrderedImportsConfiguration()
     self.swiftTestingNamingConventions = SwiftTestingNamingConventionsConfiguration()
+    self.iterateToFixpoint = false
   }
 }
