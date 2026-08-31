@@ -77,11 +77,22 @@ private final class TokenStreamCreator: SyntaxVisitor {
   /// Tracks whether we last considered ourselves inside the selection
   private var isInsideSelection = true
 
-  init(configuration: Configuration, selection: Selection, operatorTable: OperatorTable) {
+  /// The all-rules disable regions, emitted verbatim. Precomputed because a `SyntaxVisitor`
+  /// visits a statement list before its items, so mid-walk state tracking would apply
+  /// directives out of order.
+  private let verbatimRegions: [DisableRegionCollector.Region]
+
+  init(
+    configuration: Configuration,
+    selection: Selection,
+    operatorTable: OperatorTable,
+    verbatimRegions: [DisableRegionCollector.Region]
+  ) {
     self.config = configuration
     self.selection = selection
     self.operatorTable = operatorTable
     self.maxlinelength = config.lineLength
+    self.verbatimRegions = verbatimRegions
     super.init(viewMode: .all)
   }
 
@@ -866,7 +877,7 @@ private final class TokenStreamCreator: SyntaxVisitor {
     // within the empty case to the same level as the case label.
     if let lastToken = node.lastToken(viewMode: .sourceAccurate),
       node.label.lastToken(viewMode: .sourceAccurate) != lastToken,
-      !isFormatterIgnored(lastToken)
+      !isInsideFormatterSkippedItem(lastToken, verbatimRegions: verbatimRegions)
     {
       after(lastToken, tokens: caseClosingTokens)
     } else {
@@ -1656,7 +1667,7 @@ private final class TokenStreamCreator: SyntaxVisitor {
     // be left unclosed. In that case, attach the closing tokens before the following token (the next
     // `#elseif`/`#else`/`#endif`) instead, which is always visited.
     if let lastElemTok = node.elements?.lastToken(viewMode: .sourceAccurate),
-      !isFormatterIgnored(lastElemTok)
+      !isInsideFormatterSkippedItem(lastElemTok, verbatimRegions: verbatimRegions)
     {
       after(lastElemTok, tokens: .break(breakKindClose, newlines: .soft), .close)
     } else {
@@ -1688,7 +1699,8 @@ private final class TokenStreamCreator: SyntaxVisitor {
   override func visit(_ node: MemberBlockItemListSyntax) -> SyntaxVisitorContinueKind {
     // Skip ignored items, because the tokens after `item.lastToken` would be ignored and leave
     // unclosed open tokens.
-    for item in node where !shouldFormatterIgnore(node: Syntax(item)) {
+    for item in node
+    where !shouldFormatterSkip(item, verbatimRegions: verbatimRegions) {
       before(item.firstToken(viewMode: .sourceAccurate), tokens: .open)
       let newlines: NewlineBehavior =
         item != node.last && shouldInsertNewline(basedOn: item.semicolon) ? .soft : .elective
@@ -1703,7 +1715,7 @@ private final class TokenStreamCreator: SyntaxVisitor {
   }
 
   override func visit(_ node: MemberBlockItemSyntax) -> SyntaxVisitorContinueKind {
-    if shouldFormatterIgnore(node: Syntax(node)) {
+    if shouldFormatterSkip(node, verbatimRegions: verbatimRegions) {
       appendFormatterIgnored(node: Syntax(node))
       return .skipChildren
     }
@@ -1825,7 +1837,8 @@ private final class TokenStreamCreator: SyntaxVisitor {
   override func visit(_ node: CodeBlockItemListSyntax) -> SyntaxVisitorContinueKind {
     // Skip ignored items, because the tokens after `item.lastToken` would be ignored and leave
     // unclosed open tokens.
-    for item in node where !shouldFormatterIgnore(node: Syntax(item)) {
+    for item in node
+    where !shouldFormatterSkip(item, verbatimRegions: verbatimRegions) {
       before(item.firstToken(viewMode: .sourceAccurate), tokens: .open)
       let newlines: NewlineBehavior =
         item != node.last && shouldInsertNewline(basedOn: item.semicolon) ? .soft : .elective
@@ -1840,7 +1853,7 @@ private final class TokenStreamCreator: SyntaxVisitor {
   }
 
   override func visit(_ node: CodeBlockItemSyntax) -> SyntaxVisitorContinueKind {
-    if shouldFormatterIgnore(node: Syntax(node)) {
+    if shouldFormatterSkip(node, verbatimRegions: verbatimRegions) {
       appendFormatterIgnored(node: Syntax(node))
       return .skipChildren
     }
@@ -4806,11 +4819,16 @@ extension Syntax {
     selection: Selection,
     operatorTable: OperatorTable
   ) -> [Token] {
-    let commentsMoved = CommentMovingRewriter(selection: selection).rewrite(self)
+    let commentsMoved = CommentMovingRewriter(
+      selection: selection,
+      verbatimRegions: DisableRegionCollector.verbatimRegions(in: self)
+    ).rewrite(self)
+    // The creator's regions are computed over the comment-moved tree it walks.
     return TokenStreamCreator(
       configuration: configuration,
       selection: selection,
-      operatorTable: operatorTable
+      operatorTable: operatorTable,
+      verbatimRegions: DisableRegionCollector.verbatimRegions(in: Syntax(commentsMoved))
     ).makeStream(from: commentsMoved)
   }
 }
@@ -4821,11 +4839,15 @@ extension Syntax {
 /// For example, comments after binary operators are relocated to be before the operator, which
 /// results in fewer line breaks with the comment closer to the relevant tokens.
 class CommentMovingRewriter: SyntaxRewriter {
-  init(selection: Selection = .infinite) {
+  init(selection: Selection = .infinite, verbatimRegions: [DisableRegionCollector.Region]) {
     self.selection = selection
+    self.verbatimRegions = verbatimRegions
   }
 
   private let selection: Selection
+
+  /// The all-rules disable regions of the tree this rewriter was given.
+  private let verbatimRegions: [DisableRegionCollector.Region]
 
   override func visit(_ node: SourceFileSyntax) -> SourceFileSyntax {
     if shouldFormatterIgnore(file: node) {
@@ -4835,14 +4857,18 @@ class CommentMovingRewriter: SyntaxRewriter {
   }
 
   override func visit(_ node: CodeBlockItemSyntax) -> CodeBlockItemSyntax {
-    if shouldFormatterIgnore(node: Syntax(node)) || !Syntax(node).isInsideSelection(selection) {
+    if shouldFormatterSkip(node, verbatimRegions: verbatimRegions)
+      || !Syntax(node).isInsideSelection(selection)
+    {
       return node
     }
     return super.visit(node)
   }
 
   override func visit(_ node: MemberBlockItemSyntax) -> MemberBlockItemSyntax {
-    if shouldFormatterIgnore(node: Syntax(node)) || !Syntax(node).isInsideSelection(selection) {
+    if shouldFormatterSkip(node, verbatimRegions: verbatimRegions)
+      || !Syntax(node).isInsideSelection(selection)
+    {
       return node
     }
     return super.visit(node)
@@ -4988,24 +5014,39 @@ private func shouldFormatterIgnore(file: SourceFileSyntax) -> Bool {
   return isFormatterIgnorePresent(inTrivia: file.allPrecedingTrivia, isWholeFile: true)
 }
 
-/// Returns whether the given token is contained within a formatter-ignored item.
+/// Returns whether the given token will never be visited because it is inside a statement-level
+/// item that is emitted as a single verbatim token: one covered by an all-rules disable region or
+/// carrying a node-level ignore directive.
 ///
-/// When an item is formatter-ignored, its entire subtree is emitted as a single verbatim token and
-/// none of its tokens are visited individually. Code that wants to attach tokens after such a token
+/// Every enclosing item is checked, not just the nearest one, because an outer skipped item
+/// swallows the token without visiting it. Code that wants to attach tokens after such a token
 /// (via `after(_:tokens:)`) must account for the fact that those tokens would be silently dropped.
-///
-/// - Parameter token: The token to test.
-private func isFormatterIgnored(_ token: TokenSyntax) -> Bool {
-  // Only `CodeBlockItem` and `MemberBlockItem` nodes are emitted verbatim via the per-item ignore
-  // path, so those are the only ancestors that can prevent `token` from being visited.
+private func isInsideFormatterSkippedItem(
+  _ token: TokenSyntax,
+  verbatimRegions: [DisableRegionCollector.Region]
+) -> Bool {
   var node = Syntax(token).parent
   while let current = node {
     if current.is(CodeBlockItemSyntax.self) || current.is(MemberBlockItemSyntax.self) {
-      return shouldFormatterIgnore(node: current)
+      if shouldFormatterIgnore(node: current)
+        || DisableRegionCollector.isVerbatim(current, regions: verbatimRegions)
+      {
+        return true
+      }
     }
     node = current.parent
   }
   return false
+}
+
+/// Whether a statement-level item is covered by an all-rules disable block or carries a
+/// node-level ignore directive.
+private func shouldFormatterSkip(
+  _ item: some SyntaxProtocol,
+  verbatimRegions: [DisableRegionCollector.Region]
+) -> Bool {
+  DisableRegionCollector.isVerbatim(Syntax(item), regions: verbatimRegions)
+    || shouldFormatterIgnore(node: Syntax(item))
 }
 
 extension NewlineBehavior {

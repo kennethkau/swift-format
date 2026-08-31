@@ -63,6 +63,22 @@ extension SwiftFormatCommand {
     )
     var diff: Bool = false
 
+    @Flag(
+      name: .long,
+      help: """
+        Verify the formatted output before it is written, reported, or printed: it is re-parsed \
+        and compared against a re-parse of the input, and any difference beyond the documented \
+        tolerances (trivia, literal spellings, redundant parentheses and `self`, import, modifier, and \
+        attribute order, trailing separators, and the canonicalizations performed by some \
+        default-on rules) is reported as an error. The comparison is syntactic-shape \
+        equivalence, not type checking: a few structural default-on rule rewrites are outside \
+        the tolerance set and are reported as mismatches. Under '--check'/'--diff' a \
+        verification failure is an internal error (exit code 2) and the file is not listed as \
+        merely needing reformatting.
+        """
+    )
+    var verify: Bool = false
+
     @OptionGroup()
     var configurationOptions: ConfigurationOptions
 
@@ -91,9 +107,13 @@ extension SwiftFormatCommand {
           lintFormatOptions: formatOptions,
           inPlace: inPlace,
           check: check,
-          diff: diff
+          diff: diff,
+          verify: verify
         )
         frontend.run()
+        // Under --parallel, diagnostics are buffered so concurrent file processing cannot
+        // reorder them; forward them now that all files have been processed.
+        frontend.flushDiagnostics()
 
         if check || diff {
           frontend.printCollectedResults()

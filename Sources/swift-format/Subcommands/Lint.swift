@@ -32,6 +32,17 @@ extension SwiftFormatCommand {
     )
     var strict: Bool = false
 
+    /// The format in which findings and other diagnostics are reported.
+    @Option(
+      name: .long,
+      help: """
+        The format in which diagnostics are reported: \(DiagnosticReporter.Kind.allCases.map(\.helpDescription).joined(separator: " ")) \
+        Selecting a non-default reporter buffers diagnostics and writes the report to standard output when \
+        the run finishes, in sorted order (by file, line, and column).
+        """
+    )
+    var reporter: DiagnosticReporter.Kind = .default
+
     @OptionGroup(visibility: .hidden)
     var performanceMeasurementOptions: PerformanceMeasurementsOptions
 
@@ -40,9 +51,11 @@ extension SwiftFormatCommand {
         let frontend = LintFrontend(
           configurationOptions: configurationOptions,
           lintFormatOptions: lintOptions,
-          treatWarningsAsErrors: strict
+          treatWarningsAsErrors: strict,
+          reporter: reporter
         )
         frontend.run()
+        frontend.flushDiagnostics()
 
         if frontend.diagnosticsEngine.hasErrors {
           throw ExitCode.failure

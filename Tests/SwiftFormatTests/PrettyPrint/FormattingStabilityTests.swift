@@ -11,7 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 import SwiftDiagnostics
-@_spi(Rules) import SwiftFormat
+@_spi(Internal) @_spi(Rules) import SwiftFormat
 import XCTest
 @_spi(Testing) import _SwiftFormatTestSupport
 
@@ -617,6 +617,64 @@ final class FormattingStabilityTests: DiagnosingTestCase {
           source,
           configuration: configuration,
           message: "corpus file \(url.relativePath) under the strict test configuration"
+        )
+      }
+    }
+    XCTAssertGreaterThan(testedFileCount, 100, "corpus unexpectedly small; test is not running")
+  }
+
+  /// Formats the repository's own sources under the strict test configuration and verifies that
+  /// the output is semantically equivalent to the input.
+  ///
+  /// This is the `--verify` comparison run over the same corpus as the stability test, so the
+  /// equivalence tolerances are exercised against every canonical rule at once: a rule rewrite
+  /// that the verifier does not tolerate fails here, and a verifier tolerance that is broad
+  /// enough to hide a genuine corruption fails the targeted unit tests in
+  /// `SyntaxEquivalenceTests`.
+  func testRepositorySourcesRemainEquivalentUnderTestConfiguration() throws {
+    if ProcessInfo.processInfo.environment["SWIFT_FORMAT_SKIP_CORPUS_STABILITY"] == "1" {
+      throw XCTSkip("corpus equivalence test skipped by environment variable")
+    }
+
+    let repositoryRoot =
+      URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()  // FormattingStabilityTests.swift
+      .deletingLastPathComponent()  // PrettyPrint/
+      .deletingLastPathComponent()  // SwiftFormatTests/
+      .deletingLastPathComponent()  // Tests/
+
+    let corpusDirectories = [
+      repositoryRoot.appendingPathComponent("Sources/SwiftFormat"),
+      repositoryRoot.appendingPathComponent("Sources/swift-format"),
+    ]
+
+    var configuration = makeSinglePassTestConfiguration()
+    configuration.rules[FileHeader.self.ruleName] = true
+    configuration.fileHeader.template = "Test header for {file}."
+
+    var testedFileCount = 0
+    for directory in corpusDirectories {
+      guard
+        let enumerator = FileManager.default.enumerator(
+          at: directory,
+          includingPropertiesForKeys: nil
+        )
+      else {
+        continue
+      }
+      for case let url as URL in enumerator {
+        guard url.pathExtension == "swift" else { continue }
+        let source = try String(contentsOf: url, encoding: .utf8)
+        guard !source.isEmpty else { continue }
+        testedFileCount += 1
+
+        let formatted = try format(source, configuration: configuration)
+        let originalTree = try SyntaxVerifier.parseFolded(source)
+        let formattedTree = try SyntaxVerifier.parseFolded(formatted)
+        let mismatches = SyntaxVerifier.verify(original: originalTree, formatted: formattedTree)
+        XCTAssertTrue(
+          mismatches.isEmpty,
+          "corpus file \(url.relativePath) was formatted non-equivalently: \(mismatches.map(\.description))"
         )
       }
     }

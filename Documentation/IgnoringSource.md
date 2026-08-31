@@ -93,6 +93,67 @@ In this case, only the DoNotUseSemicolons and FullyIndirectEnum rules are disabl
 throughout the file, while all other formatting rules (such as line breaking and
 indentation) remain active.
 
+## Disabling Rules Over a Region
+
+The node-scoped `swift-format-ignore` directive covers the node that follows it.
+For runs of code — tables of aligned data, generated code, a block of statements —
+the block directives disable rules from one comment to another:
+
+```swift
+// swift-format-disable
+let  aligned   =  table
+var  values    =  here
+// swift-format-enable
+```
+
+Between the two comments, every rule is disabled **and each covered statement
+is printed verbatim**: the formatter does not change the spacing, line breaks,
+or indentation within it. Two caveats: whitespace between the end of one
+statement and the next is still normalized, and rules that decide on a whole
+statement list rather than individual statements — such as `DoNotUseSemicolons`
+and `OneVariableDeclarationPerLine` — consult the disable state where the list
+begins, so a block opened inside a list does not suppress them for statements
+above it. Use the named form to disable only specific rules, in which case the
+region is still formatted normally and only the named rules are suppressed:
+
+```swift
+// swift-format-disable: DoNotUseSemicolons
+func foo() { bar();baz(); }
+// swift-format-enable
+```
+
+A `swift-format-disable` without a matching `swift-format-enable` runs to the end
+of the file. Inside an all-rules block, `swift-format-enable: SomeRule`
+re-enables just that rule. Directives are recognized before declarations and
+statements (see [Understanding Nodes](#understanding-nodes) below) — including as
+trailing comments on the previous line, like `swift-format-ignore`, in which case
+the block's line-anchored range covers the directive's own line — and
+additionally on the line before a closing `}`, so a block opened inside a
+declaration can be closed at its end. Directives are honored wherever they are
+recognized, including inside another disable block: an `enable` nested in one
+closes it from that point on.
+
+## Disabling Rules on a Single Line
+
+Line-scoped directives suppress rules (and their lint findings) on one line
+without touching anything else. They may trail code on the same line:
+
+```swift
+let a = 1  // swift-format-disable:this
+let b = foo+bar+baz  // swift-format-disable:previous
+// swift-format-disable:next DoNotUseSemicolons
+func foo() { bar();baz() }
+```
+
+:this` covers the directive's own line, `:previous` the line before it, and
+`:next` the line after it; each optionally followed by a list of rule names, or
+no list to affect all rules. Line-scoped directives do **not** make text
+verbatim — the pretty printer still normalizes spacing and line breaks on the
+covered line. Like block directives, they mask rules whose decision point is
+the enclosing statement list at the list's first line, so a line scope above a
+multi-statement list affects that list as a whole. Use a node-level `swift-format-ignore` or a
+`swift-format-disable` block when the text must be preserved exactly.
+
 ## Understanding Nodes
 
 `swift-format` parses Swift into an abstract syntax tree, where each element of
@@ -109,7 +170,7 @@ top level nodes that support suppressing formatting are:
     loop). All code nested syntactically inside of the ignored node is also
     ignored by the formatter. This means ignoring a struct declaration also
     ignores all code inside of the struct declaration.
-- `MemberDeclListItemSyntax`
+- `MemberBlockItemSyntax`
   - Any member declaration inside of a declaration (e.g. properties and
     functions declared inside of a struct/class/enum). All code nested
     syntactically inside of the ignored node is also ignored by the formatter.

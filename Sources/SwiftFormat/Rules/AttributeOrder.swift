@@ -27,8 +27,8 @@ import SwiftSyntax
 /// Lint: An attribute list whose canonical run order differs from the source order yields one
 ///       lint error on the first attribute of the affected run.
 ///
-/// Format: The allowlisted runs are sorted in place. A run containing a comment on any of its
-///         attached to them is diagnosed but left as written.
+/// Format: The allowlisted runs are sorted in place. A run carrying a comment on any of its
+///         attributes is diagnosed but left as written.
 @_spi(Rules)
 public final class AttributeOrder: SyntaxFormatRule {
   public override class var isOptIn: Bool { return true }

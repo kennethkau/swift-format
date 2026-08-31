@@ -78,3 +78,44 @@ struct Diagnostic {
     self.message = message
   }
 }
+
+extension Diagnostic {
+  /// The deterministic report order: file, line, column, severity (notes after the finding
+  /// they elaborate), category, message. Components beyond location make the order
+  /// independent of emission order under parallel processing.
+  static func areInSortedOrder(_ lhs: Diagnostic, _ rhs: Diagnostic) -> Bool {
+    let lhsFile = lhs.location?.file ?? ""
+    let rhsFile = rhs.location?.file ?? ""
+    if lhsFile != rhsFile {
+      return lhsFile < rhsFile
+    }
+    let lhsLine = lhs.location?.line ?? 0
+    let rhsLine = rhs.location?.line ?? 0
+    if lhsLine != rhsLine {
+      return lhsLine < rhsLine
+    }
+    let lhsColumn = lhs.location?.column ?? 0
+    let rhsColumn = rhs.location?.column ?? 0
+    if lhsColumn != rhsColumn {
+      return lhsColumn < rhsColumn
+    }
+    if lhs.severity != rhs.severity {
+      return severityRank(lhs.severity) < severityRank(rhs.severity)
+    }
+    let lhsCategory = lhs.category ?? ""
+    let rhsCategory = rhs.category ?? ""
+    if lhsCategory != rhsCategory {
+      return lhsCategory < rhsCategory
+    }
+    return lhs.message < rhs.message
+  }
+
+  /// The sort rank of a severity; notes rank after findings so they follow their parent.
+  static func severityRank(_ severity: Severity) -> Int {
+    switch severity {
+    case .error: return 0
+    case .warning: return 1
+    case .note: return 2
+    }
+  }
+}

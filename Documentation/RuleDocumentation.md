@@ -129,8 +129,8 @@ barrier. Attributes of `import` declarations and of function parameters are neve
 Lint: An attribute list whose canonical run order differs from the source order yields one
       lint error on the first attribute of the affected run.
 
-Format: The allowlisted runs are sorted in place. A run containing a comment on any of its
-        attached to them is diagnosed but left as written.
+Format: The allowlisted runs are sorted in place. A run carrying a comment on any of its
+        attributes is diagnosed but left as written.
 
 `AttributeOrder` rule can format your code automatically.
 
@@ -685,6 +685,26 @@ Format: The literal is rewritten with minimal delimiters.
 
 ### RedundantSelf
 
+Removes `self.` prefixes that are not required by the language.
+
+The rule is conservative: a prefix is removed only where a purely syntactic analysis can
+prove that the unqualified name resolves to the same member. The prefix is kept in the
+following places:
+  * Inside a closure or local function, where whether `self` is required depends on the
+    escaping semantics of the context, which are not visible to the formatter
+  * Inside a property initializer, inside a macro expansion, and in a pattern position,
+    where the unqualified form would bind a name instead of referring to the member
+  * When a binding with the same name as the member is in scope at the use site, such as a
+    function parameter, an earlier local or type declaration, a condition or `catch`
+    binding, an implicit accessor name like `newValue`, or a generic parameter of the
+    enclosing type
+  * When the member's name is a keyword, so the bare form would not parse (for example
+    `self.init` or `self.Type`)
+
+Lint: A redundant `self.` prefix yields one lint error.
+
+Format: The prefix is removed in the same pass that diagnoses it. A prefix with a comment
+        attached to it is diagnosed but left unchanged, so that the comment is preserved.
 
 `RedundantSelf` rule can format your code automatically.
 
