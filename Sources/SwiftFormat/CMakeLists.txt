@@ -62,11 +62,13 @@ add_library(SwiftFormat
   Rules/AmbiguousTrailingClosureOverload.swift
   Rules/AvoidRetroactiveConformances.swift
   Rules/AttributeOrder.swift
+  Rules/CanonicalDocComments.swift
   Rules/BeginDocumentationCommentWithOneLineSummary.swift
   Rules/BlankLinePolicy.swift
   Rules/DoNotUseSemicolons.swift
   Rules/DontRepeatTypeInStaticProperties.swift
   Rules/FileScopedDeclarationPrivacy.swift
+  Rules/FileHeader.swift
   Rules/FullyIndirectEnum.swift
   Rules/GroupedDeclarations.swift
   Rules/GroupNumericLiterals.swift
@@ -90,6 +92,7 @@ add_library(SwiftFormat
   Rules/OneVariableDeclarationPerLine.swift
   Rules/OnlyOneTrailingClosureArgument.swift
   Rules/OrderedImports.swift
+  Rules/ReflowComments.swift
   Rules/ReplaceForEachWithForLoop.swift
   Rules/ReturnVoidInsteadOfEmptyTuple.swift
   Rules/SwiftTestingNamingConventions.swift

@@ -18,8 +18,10 @@ Here's the list of available rules:
 - [AvoidRetroactiveConformances](#AvoidRetroactiveConformances)
 - [BeginDocumentationCommentWithOneLineSummary](#BeginDocumentationCommentWithOneLineSummary)
 - [BlankLinePolicy](#BlankLinePolicy)
+- [CanonicalDocComments](#CanonicalDocComments)
 - [DoNotUseSemicolons](#DoNotUseSemicolons)
 - [DontRepeatTypeInStaticProperties](#DontRepeatTypeInStaticProperties)
+- [FileHeader](#FileHeader)
 - [FileScopedDeclarationPrivacy](#FileScopedDeclarationPrivacy)
 - [FullyIndirectEnum](#FullyIndirectEnum)
 - [GroupNumericLiterals](#GroupNumericLiterals)
@@ -45,6 +47,7 @@ Here's the list of available rules:
 - [OnlyOneTrailingClosureArgument](#OnlyOneTrailingClosureArgument)
 - [OrderedImports](#OrderedImports)
 - [RedundantSelf](#RedundantSelf)
+- [ReflowComments](#ReflowComments)
 - [ReplaceForEachWithForLoop](#ReplaceForEachWithForLoop)
 - [ReturnVoidInsteadOfEmptyTuple](#ReturnVoidInsteadOfEmptyTuple)
 - [SwiftTestingNamingConventions](#SwiftTestingNamingConventions)
@@ -182,6 +185,28 @@ are inserted.
 
 `BlankLinePolicy` rule can format your code automatically.
 
+### CanonicalDocComments
+
+Normalizes the layout of `///` doc comments without touching their prose.
+
+Four normalizations are applied to every run of doc line comments: at least one space
+separates `///` from the text of a non-empty line (a line glued as `///text` gains one);
+runs of two or more blank doc lines collapse to a single blank doc line, and a trailing
+blank doc line is removed; dashed list items are aligned — an item whose name is a
+documented DocC field (for example `- Parameters:`) is written with exactly one space
+before the dash, and any other dashed item (for example a parameter entry under
+`- Parameters:`) with exactly three; and trailing whitespace is stripped from every
+non-code-block line. Lines indented by four or more spaces are indented code blocks and pass
+through unchanged, blank lines and trailing whitespace included. The words of the comment
+are never rewrapped, reordered, or otherwise changed, and block doc comments (`/** */`) are
+left to the `UseTripleSlashForDocumentationComments` rule.
+
+Lint: A doc comment that differs from its normalized form yields one lint error.
+
+Format: The doc comment is rewritten to its normalized form.
+
+`CanonicalDocComments` rule can format your code automatically.
+
 ### DoNotUseSemicolons
 
 Semicolons should not be present in Swift code.
@@ -203,6 +228,30 @@ the type contains a namespace (i.e. `UIColor`) the namespace is ignored;
 Lint: Static properties of a type that return that type will yield a lint error.
 
 `DontRepeatTypeInStaticProperties` is a linter-only rule.
+
+### FileHeader
+
+Enforces a canonical file header comment block.
+
+The header text is supplied as `fileHeader.template`; each template line is written as a `//`
+line comment. The only placeholder is `{file}`, replaced with the name (without extension) of
+the file being formatted; date- and environment-derived placeholders are unsupported because
+they would make the output depend on when or where the tool runs.
+
+A leading comment block that differs from the rendered template is replaced; a file with no
+leading comment block gets the header inserted at the top, after any non-comment trivia (a
+byte-order marker stays at offset 0). Documentation comments (`///` and `/** */`) are never
+treated as header material. A written header is followed by a blank line; a header that
+already matches the template is left untouched, even when no blank line follows it. A file
+with no statements — including one containing only comments — is left alone.
+
+Lint: A file whose leading comment block differs from `fileHeader.template` — or that has
+      none — yields a lint error.
+
+Format: The leading comment block is replaced with — or the rendered template is inserted as —
+        the file header.
+
+`FileHeader` rule can format your code automatically.
 
 ### FileScopedDeclarationPrivacy
 
@@ -522,6 +571,32 @@ Format: Imports will be reordered and (optionally) grouped at the top of the fil
 
 
 `RedundantSelf` rule can format your code automatically.
+
+### ReflowComments
+
+Joins comments that were hard-wrapped across multiple lines back into one line when the combined
+text still fits within the configured line length.
+
+The rule reflows only line comments (`//`) and documentation line comments (`///`) — the set
+is selected by `reflowComments.reflowedCommentKinds` — and leaves block comments
+(`/* ... */` and `/** */`) untouched. It parses the body of each comment as
+Markdown and joins only lines that belong to the same paragraph. The Markdown parser recognizes
+lists, headings, indented and fenced code blocks, block quotes, and thematic breaks, and the
+rule never joins lines across those constructs or across the blank lines between paragraphs;
+wrapped lines within a single paragraph still merge, including the wrapped text of a list
+item. The rule also
+never merges "divider" lines that contain no words (for example `//===----===//`), lines that
+begin with a run of three or more rule characters (for example `=== Notes ===`,
+`--- Section ---`), or lines matching `reflowComments.preservedLinePrefixes`. If a comment
+block contains a `//===...===//` file header, the rule leaves the whole block alone.
+
+Lint: If two adjacent comment lines in the same paragraph can be joined without exceeding
+      `lineLength`, a lint error is raised.
+
+Format: Adjacent comment lines in the same paragraph that can be joined without exceeding
+        `lineLength` are merged.
+
+`ReflowComments` rule can format your code automatically.
 
 ### ReplaceForEachWithForLoop
 

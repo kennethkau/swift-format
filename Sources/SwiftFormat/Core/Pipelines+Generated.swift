@@ -506,6 +506,7 @@ class LintPipeline: SyntaxVisitor {
     visitIfEnabled(AlwaysUseLowerCamelCase.visit, for: node)
     visitIfEnabled(AmbiguousTrailingClosureOverload.visit, for: node)
     visitIfEnabled(BlankLinePolicy.visit, for: node)
+    visitIfEnabled(FileHeader.visit, for: node)
     visitIfEnabled(FileScopedDeclarationPrivacy.visit, for: node)
     visitIfEnabled(NeverForceUnwrap.visit, for: node)
     visitIfEnabled(NeverUseForceTry.visit, for: node)
@@ -517,6 +518,7 @@ class LintPipeline: SyntaxVisitor {
     onVisitPost(rule: AlwaysUseLowerCamelCase.self, for: node)
     onVisitPost(rule: AmbiguousTrailingClosureOverload.self, for: node)
     onVisitPost(rule: BlankLinePolicy.self, for: node)
+    onVisitPost(rule: FileHeader.self, for: node)
     onVisitPost(rule: FileScopedDeclarationPrivacy.self, for: node)
     onVisitPost(rule: NeverForceUnwrap.self, for: node)
     onVisitPost(rule: NeverUseForceTry.self, for: node)
@@ -595,11 +597,15 @@ class LintPipeline: SyntaxVisitor {
   }
 
   override func visit(_ node: TokenSyntax) -> SyntaxVisitorContinueKind {
+    visitIfEnabled(CanonicalDocComments.visit, for: node)
     visitIfEnabled(NoBlockComments.visit, for: node)
+    visitIfEnabled(ReflowComments.visit, for: node)
     return .visitChildren
   }
   override func visitPost(_ node: TokenSyntax) {
+    onVisitPost(rule: CanonicalDocComments.self, for: node)
     onVisitPost(rule: NoBlockComments.self, for: node)
+    onVisitPost(rule: ReflowComments.self, for: node)
   }
 
   override func visit(_ node: TryExprSyntax) -> SyntaxVisitorContinueKind {
@@ -664,7 +670,9 @@ extension FormatPipeline {
     node = AlwaysUseLiteralForEmptyCollectionInit(context: context).apply(to: node)
     node = AttributeOrder(context: context).apply(to: node)
     node = BlankLinePolicy(context: context).apply(to: node)
+    node = CanonicalDocComments(context: context).apply(to: node)
     node = DoNotUseSemicolons(context: context).apply(to: node)
+    node = FileHeader(context: context).apply(to: node)
     node = FileScopedDeclarationPrivacy(context: context).apply(to: node)
     node = FullyIndirectEnum(context: context).apply(to: node)
     node = GroupNumericLiterals(context: context).apply(to: node)
@@ -681,6 +689,7 @@ extension FormatPipeline {
     node = OneVariableDeclarationPerLine(context: context).apply(to: node)
     node = OrderedImports(context: context).apply(to: node)
     node = RedundantSelf(context: context).apply(to: node)
+    node = ReflowComments(context: context).apply(to: node)
     node = ReturnVoidInsteadOfEmptyTuple(context: context).apply(to: node)
     node = UseEarlyExits(context: context).apply(to: node)
     node = UseExplicitNilCheckInConditions(context: context).apply(to: node)

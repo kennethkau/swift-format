@@ -57,6 +57,8 @@ public struct Configuration: Codable, Equatable {
     case indentBlankLines
     case orderedImports
     case swiftTestingNamingConventions
+    case fileHeader
+    case reflowComments
     case blankLinePolicy
     case iterateToFixpoint
   }
@@ -409,6 +411,12 @@ public struct Configuration: Codable, Equatable {
   /// Configuration for the `SwiftTestingNamingConventions` rule.
   public var swiftTestingNamingConventions: SwiftTestingNamingConventionsConfiguration
 
+  /// Configuration for the `FileHeader` rule.
+  public var fileHeader: FileHeaderConfiguration
+
+  /// Configuration for the `ReflowComments` rule.
+  public var reflowComments: ReflowCommentsConfiguration
+
   /// Configuration for the `BlankLinePolicy` rule, which governs where blank lines are required,
   /// forbidden, or left to the author's discretion.
   public var blankLinePolicy: BlankLinePolicyConfiguration
@@ -623,6 +631,20 @@ public struct Configuration: Codable, Equatable {
       )
       ?? defaults.swiftTestingNamingConventions
 
+    self.fileHeader =
+      try container.decodeIfPresent(
+        FileHeaderConfiguration.self,
+        forKey: .fileHeader
+      )
+      ?? defaults.fileHeader
+
+    self.reflowComments =
+      try container.decodeIfPresent(
+        ReflowCommentsConfiguration.self,
+        forKey: .reflowComments
+      )
+      ?? defaults.reflowComments
+
     self.blankLinePolicy =
       try container.decodeIfPresent(
         BlankLinePolicyConfiguration.self,
@@ -686,6 +708,8 @@ public struct Configuration: Codable, Equatable {
     try container.encode(indentBlankLines, forKey: .indentBlankLines)
     try container.encode(orderedImports, forKey: .orderedImports)
     try container.encode(swiftTestingNamingConventions, forKey: .swiftTestingNamingConventions)
+    try container.encode(fileHeader, forKey: .fileHeader)
+    try container.encode(reflowComments, forKey: .reflowComments)
     try container.encode(blankLinePolicy, forKey: .blankLinePolicy)
     try container.encode(iterateToFixpoint, forKey: .iterateToFixpoint)
     try container.encode(rules, forKey: .rules)
@@ -752,6 +776,82 @@ public struct NoAssignmentInExpressionsConfiguration: Codable, Equatable {
   ]
 
   public init() {}
+}
+
+/// Configuration for the `FileHeader` rule.
+public struct FileHeaderConfiguration: Codable, Equatable {
+  /// The template for the file header comment block, as literal text; each line is rendered as a
+  /// `//` line comment. The only placeholder is `{file}`, replaced with the name of the file
+  /// being formatted without its extension. `nil` (the default) or an empty string disables the
+  /// rule's rewriting even when the rule is enabled.
+  public var template: String? = nil
+
+  private enum CodingKeys: String, CodingKey {
+    case template
+  }
+
+  public init() {}
+
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    // Encode `nil` explicitly so dumped configurations list every key.
+    if let template {
+      try container.encode(template, forKey: .template)
+    } else {
+      try container.encodeNil(forKey: .template)
+    }
+  }
+}
+
+/// Configuration for the `ReflowComments` rule.
+public struct ReflowCommentsConfiguration: Codable, Equatable {
+  /// The kinds of comments that the rule is allowed to reflow.
+  public enum CommentKind: String, Codable, CaseIterable, Sendable {
+    /// Regular line comments introduced by `//`.
+    case line
+    /// Documentation line comments introduced by `///`.
+    case docLine
+  }
+
+  /// The kinds of comments that should be reflowed.
+  ///
+  /// Defaults to every kind. Remove a kind to leave those comments untouched; for example, drop
+  /// `.docLine` to reflow only regular `//` line comments.
+  public var reflowedCommentKinds: Set<CommentKind> = Set(CommentKind.allCases)
+
+  /// Line content prefixes that are never merged with an adjacent comment line.
+  ///
+  /// Defaults cover common license header terms and Xcode source annotations.
+  public var preservedLinePrefixes: [String] = [
+    "MARK:", "TODO:", "FIXME:",
+    "Copyright", "Licensed",
+  ]
+
+  private enum CodingKeys: String, CodingKey {
+    case reflowedCommentKinds
+    case preservedLinePrefixes
+  }
+
+  public init() {}
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = ReflowCommentsConfiguration()
+    self.reflowedCommentKinds =
+      try container.decodeIfPresent(Set<CommentKind>.self, forKey: .reflowedCommentKinds)
+      ?? defaults.reflowedCommentKinds
+    self.preservedLinePrefixes =
+      try container.decodeIfPresent([String].self, forKey: .preservedLinePrefixes)
+      ?? defaults.preservedLinePrefixes
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    // Encode the set in a stable declaration order so that dumped configurations are deterministic.
+    let orderedKinds = CommentKind.allCases.filter(reflowedCommentKinds.contains)
+    try container.encode(orderedKinds, forKey: .reflowedCommentKinds)
+    try container.encode(preservedLinePrefixes, forKey: .preservedLinePrefixes)
+  }
 }
 
 /// Configuration for the `OrderedImports` rule.

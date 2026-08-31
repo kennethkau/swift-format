@@ -424,6 +424,32 @@ too long.
 
 ---
 
+### `fileHeader`
+**type:** object
+
+**description:** Configuration for the `FileHeader` rule.
+
+- `template` _(string)_: The template for the file header comment block, as literal text; each line is rendered as a `//` line comment. The only placeholder is `{file}`, replaced with the name of the file being formatted without its extension. Date- and environment-derived placeholders are not supported: they would make the output depend on when or where the tool runs. May be `null` (the default) or an empty string to disable the rule's rewriting even when the rule is enabled.
+
+**default:** `{ "template": null }`
+
+---
+
+### `reflowComments`
+**type:** object
+
+**description:** Configuration for the `ReflowComments` rule.
+
+- `reflowedCommentKinds` _(strings array)_: The kinds of comments that should be reflowed; one or both of `"line"` (`//`) and `"docLine"` (`///`). Defaults to every kind; remove a kind to leave those comments untouched.
+- `preservedLinePrefixes` _(strings array)_: Line content prefixes that are never merged with an adjacent comment line.
+
+**default:** `{ "reflowedCommentKinds": ["line", "docLine"], "preservedLinePrefixes": ["MARK:", "TODO:", "FIXME:", "Copyright", "Licensed"] }`
+
+---
+
+> TODO: Add support for enabling/disabling specific syntax transformations in
+> the pipeline.
+
 ### Example
 
 An example `.swift-format` configuration file is shown below.
