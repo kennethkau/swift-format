@@ -93,6 +93,18 @@ final class ConfigurationCodingTests: XCTestCase {
     configuration.swiftTestingNamingConventions.forbidSuiteDescription = true
     configuration.swiftTestingNamingConventions.forbidTestDescription = true
     configuration.swiftTestingNamingConventions.requireRawIdentifierTestNames = true
+    configuration.blankLinePolicy.betweenDeclarations = .exactlyOne
+    configuration.blankLinePolicy.scopeEdges = .none
+    configuration.blankLinePolicy.members = .none
+    configuration.blankLinePolicy.marks = MarkBlankLinePolicy(before: .none, after: .exactlyOne)
+    configuration.blankLinePolicy.switchCases = .none
+    configuration.blankLinePolicy.afterCaseLabel = .optional
+    configuration.blankLinePolicy.attributes = .optional
+    configuration.blankLinePolicy.expressions = .optional
+    configuration.blankLinePolicy.conditionalCompilationEdges = .optional
+    configuration.blankLinePolicy.guardPrologue = .optional
+    configuration.blankLinePolicy.beforeElse = .optional
+    configuration.blankLinePolicy.statements = .none
     configuration.iterateToFixpoint = true
 
     configuration.rules["DoNotUseSemicolons"] = false
