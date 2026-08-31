@@ -61,12 +61,14 @@ add_library(SwiftFormat
   Rules/AlwaysUseLowerCamelCase.swift
   Rules/AmbiguousTrailingClosureOverload.swift
   Rules/AvoidRetroactiveConformances.swift
+  Rules/AttributeOrder.swift
   Rules/BeginDocumentationCommentWithOneLineSummary.swift
   Rules/BlankLinePolicy.swift
   Rules/DoNotUseSemicolons.swift
   Rules/DontRepeatTypeInStaticProperties.swift
   Rules/FileScopedDeclarationPrivacy.swift
   Rules/FullyIndirectEnum.swift
+  Rules/GroupedDeclarations.swift
   Rules/GroupNumericLiterals.swift
   Rules/IdentifiersMustBeASCII.swift
   Rules/NeverForceUnwrap.swift
