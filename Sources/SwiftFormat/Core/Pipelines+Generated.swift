@@ -176,6 +176,14 @@ class LintPipeline: SyntaxVisitor {
     onVisitPost(rule: UseExplicitNilCheckInConditions.self, for: node)
   }
 
+  override func visit(_ node: DeclModifierListSyntax) -> SyntaxVisitorContinueKind {
+    visitIfEnabled(ModifierOrder.visit, for: node)
+    return .visitChildren
+  }
+  override func visitPost(_ node: DeclModifierListSyntax) {
+    onVisitPost(rule: ModifierOrder.self, for: node)
+  }
+
   override func visit(_ node: DeinitializerDeclSyntax) -> SyntaxVisitorContinueKind {
     visitIfEnabled(AllPublicDeclarationsHaveDocumentation.visit, for: node)
     visitIfEnabled(BeginDocumentationCommentWithOneLineSummary.visit, for: node)
@@ -238,6 +246,14 @@ class LintPipeline: SyntaxVisitor {
     onVisitPost(rule: AvoidRetroactiveConformances.self, for: node)
     onVisitPost(rule: NoAccessLevelOnExtensionDeclaration.self, for: node)
     onVisitPost(rule: UseTripleSlashForDocumentationComments.self, for: node)
+  }
+
+  override func visit(_ node: FloatLiteralExprSyntax) -> SyntaxVisitorContinueKind {
+    visitIfEnabled(CanonicalNumberLiterals.visit, for: node)
+    return .visitChildren
+  }
+  override func visitPost(_ node: FloatLiteralExprSyntax) {
+    onVisitPost(rule: CanonicalNumberLiterals.self, for: node)
   }
 
   override func visit(_ node: ForStmtSyntax) -> SyntaxVisitorContinueKind {
@@ -395,10 +411,12 @@ class LintPipeline: SyntaxVisitor {
   }
 
   override func visit(_ node: IntegerLiteralExprSyntax) -> SyntaxVisitorContinueKind {
+    visitIfEnabled(CanonicalNumberLiterals.visit, for: node)
     visitIfEnabled(GroupNumericLiterals.visit, for: node)
     return .visitChildren
   }
   override func visitPost(_ node: IntegerLiteralExprSyntax) {
+    onVisitPost(rule: CanonicalNumberLiterals.self, for: node)
     onVisitPost(rule: GroupNumericLiterals.self, for: node)
   }
 
@@ -526,6 +544,16 @@ class LintPipeline: SyntaxVisitor {
     onVisitPost(rule: OrderedImports.self, for: node)
   }
 
+  override func visit(_ node: StringLiteralExprSyntax) -> SyntaxVisitorContinueKind {
+    visitIfEnabled(CanonicalStringEscapes.visit, for: node)
+    visitIfEnabled(RedundantRawString.visit, for: node)
+    return .visitChildren
+  }
+  override func visitPost(_ node: StringLiteralExprSyntax) {
+    onVisitPost(rule: CanonicalStringEscapes.self, for: node)
+    onVisitPost(rule: RedundantRawString.self, for: node)
+  }
+
   override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
     visitIfEnabled(AllPublicDeclarationsHaveDocumentation.visit, for: node)
     visitIfEnabled(BeginDocumentationCommentWithOneLineSummary.visit, for: node)
@@ -616,6 +644,14 @@ class LintPipeline: SyntaxVisitor {
     onVisitPost(rule: NeverUseForceTry.self, for: node)
   }
 
+  override func visit(_ node: TupleExprSyntax) -> SyntaxVisitorContinueKind {
+    visitIfEnabled(RedundantParens.visit, for: node)
+    return .visitChildren
+  }
+  override func visitPost(_ node: TupleExprSyntax) {
+    onVisitPost(rule: RedundantParens.self, for: node)
+  }
+
   override func visit(_ node: TypeAliasDeclSyntax) -> SyntaxVisitorContinueKind {
     visitIfEnabled(AllPublicDeclarationsHaveDocumentation.visit, for: node)
     visitIfEnabled(BeginDocumentationCommentWithOneLineSummary.visit, for: node)
@@ -671,11 +707,14 @@ extension FormatPipeline {
     node = AttributeOrder(context: context).apply(to: node)
     node = BlankLinePolicy(context: context).apply(to: node)
     node = CanonicalDocComments(context: context).apply(to: node)
+    node = CanonicalNumberLiterals(context: context).apply(to: node)
+    node = CanonicalStringEscapes(context: context).apply(to: node)
     node = DoNotUseSemicolons(context: context).apply(to: node)
     node = FileHeader(context: context).apply(to: node)
     node = FileScopedDeclarationPrivacy(context: context).apply(to: node)
     node = FullyIndirectEnum(context: context).apply(to: node)
     node = GroupNumericLiterals(context: context).apply(to: node)
+    node = ModifierOrder(context: context).apply(to: node)
     node = NoAccessLevelOnExtensionDeclaration(context: context).apply(to: node)
     node = NoAssignmentInExpressions(context: context).apply(to: node)
     node = NoCasesWithOnlyFallthrough(context: context).apply(to: node)
@@ -688,6 +727,8 @@ extension FormatPipeline {
     node = OneCasePerLine(context: context).apply(to: node)
     node = OneVariableDeclarationPerLine(context: context).apply(to: node)
     node = OrderedImports(context: context).apply(to: node)
+    node = RedundantParens(context: context).apply(to: node)
+    node = RedundantRawString(context: context).apply(to: node)
     node = RedundantSelf(context: context).apply(to: node)
     node = ReflowComments(context: context).apply(to: node)
     node = ReturnVoidInsteadOfEmptyTuple(context: context).apply(to: node)

@@ -19,6 +19,8 @@ Here's the list of available rules:
 - [BeginDocumentationCommentWithOneLineSummary](#BeginDocumentationCommentWithOneLineSummary)
 - [BlankLinePolicy](#BlankLinePolicy)
 - [CanonicalDocComments](#CanonicalDocComments)
+- [CanonicalNumberLiterals](#CanonicalNumberLiterals)
+- [CanonicalStringEscapes](#CanonicalStringEscapes)
 - [DoNotUseSemicolons](#DoNotUseSemicolons)
 - [DontRepeatTypeInStaticProperties](#DontRepeatTypeInStaticProperties)
 - [FileHeader](#FileHeader)
@@ -27,6 +29,7 @@ Here's the list of available rules:
 - [GroupNumericLiterals](#GroupNumericLiterals)
 - [GroupedDeclarations](#GroupedDeclarations)
 - [IdentifiersMustBeASCII](#IdentifiersMustBeASCII)
+- [ModifierOrder](#ModifierOrder)
 - [NeverForceUnwrap](#NeverForceUnwrap)
 - [NeverUseForceTry](#NeverUseForceTry)
 - [NeverUseImplicitlyUnwrappedOptionals](#NeverUseImplicitlyUnwrappedOptionals)
@@ -46,6 +49,8 @@ Here's the list of available rules:
 - [OneVariableDeclarationPerLine](#OneVariableDeclarationPerLine)
 - [OnlyOneTrailingClosureArgument](#OnlyOneTrailingClosureArgument)
 - [OrderedImports](#OrderedImports)
+- [RedundantParens](#RedundantParens)
+- [RedundantRawString](#RedundantRawString)
 - [RedundantSelf](#RedundantSelf)
 - [ReflowComments](#ReflowComments)
 - [ReplaceForEachWithForLoop](#ReplaceForEachWithForLoop)
@@ -207,6 +212,50 @@ Format: The doc comment is rewritten to its normalized form.
 
 `CanonicalDocComments` rule can format your code automatically.
 
+### CanonicalNumberLiterals
+
+Normalizes the spelling of numeric literals.
+
+Unlike `GroupNumericLiterals`, which only *adds* grouping to literals that do not already
+contain underscores, this rule removes every degree of freedom in the literal's spelling that does not change its value: any
+existing underscores are removed and the normalized grouping is recomputed — decimal every 3
+digits at 7 or more, hexadecimal every 4 digits at 8 or more, binary every 8 digits at 10 or
+more (the same thresholds as `GroupNumericLiterals`), and octal every 3 digits at 5 or more
+(an extension: `GroupNumericLiterals` leaves octal alone) — hexadecimal digits are
+uppercased, exponent markers are lowercased, insignificant leading zeros are removed down to a
+single digit in the integer part and in the exponent, trailing fraction zeros are removed down
+to a single digit so the literal stays floating-point, and fraction parts are left ungrouped.
+
+Lint: A literal that differs from its normalized form yields a lint error.
+
+Format: The literal is rewritten to its normalized form.
+
+`CanonicalNumberLiterals` rule can format your code automatically.
+
+### CanonicalStringEscapes
+
+Rewrites escape sequences in non-raw string literals to their minimal form.
+
+The minimal form uses the shortest escape that denotes its scalar: `\'` is never
+needed and becomes a plain `'`, a `\u{...}` escape whose scalar has a shorter name (`\n`,
+`\t`, `\r`, `\0`, `\"`, `\\`) or is a printable ASCII character needing no escape at all is
+rewritten to that form, and every remaining `\u{...}` escape keeps its value but loses
+leading zeros and uppercase hex digits. A double quote always stays escaped as `\"` — the
+shortest *escape* — including in multiline literals, where a bare quote would also be legal.
+The literal's value is preserved exactly in every rewrite.
+
+Raw string literals are left to `RedundantRawString`: their escapes use `\#`, which changes
+meaning with the delimiter's pound count. Literals containing parse errors are left alone,
+and any other sequence — the fixed escapes, or text that does not follow the
+`\u{hex-digits}` shape — is passed through verbatim.
+
+Lint: A string literal that contains an escape sequence not in minimal form yields a lint
+      error.
+
+Format: The escape sequences are rewritten to their minimal form.
+
+`CanonicalStringEscapes` rule can format your code automatically.
+
 ### DoNotUseSemicolons
 
 Semicolons should not be present in Swift code.
@@ -323,6 +372,31 @@ All identifiers must be ASCII.
 Lint: If an identifier contains non-ASCII characters, a lint error is raised.
 
 `IdentifiersMustBeASCII` is a linter-only rule.
+
+### ModifierOrder
+
+Sorts the modifiers of a declaration into a fixed order.
+
+Modifier order is not semantic in Swift — the modifiers in a declaration's modifier list
+commute — so a fixed order removes one degree of freedom from the source without changing
+meaning. The fixed order is: access level (`open`, `public`, `package`, `internal`,
+`fileprivate`, `private`), then `final`, `required`, `convenience`, `static`/`class`,
+`override`, `mutating`/`nonmutating`, `borrowing`/`consuming`, `lazy`, `weak`/`unowned`,
+`optional`, `indirect`, `dynamic`, and `nonisolated`/`isolated`/`distributed`. Modifiers not
+in this list keep their relative order after the ranked ones. A modifier carrying an
+argument sorts after the same-rank argument-less form (for example `public private(set) var`,
+never `private(set) public var`).
+
+Lint: A modifier list that is not in the fixed order yields a lint error on the first
+      modifier that follows a higher-ranked modifier.
+
+Format: The modifier list is reordered into the fixed order; the leading trivia of the
+        list's first modifier and the trailing trivia of its last modifier are preserved and
+        interior separation is normalized to a single space. When any modifier carries a
+        comment, only the lint error is emitted — the rewrite is skipped so no comment is
+        displaced or lost.
+
+`ModifierOrder` rule can format your code automatically.
 
 ### NeverForceUnwrap
 
@@ -566,6 +640,48 @@ Lint: If an import appears anywhere other than the beginning of the file it resi
 Format: Imports will be reordered and (optionally) grouped at the top of the file.
 
 `OrderedImports` rule can format your code automatically.
+
+### RedundantParens
+
+Removes parentheses that cannot change the meaning of the expression they wrap.
+
+A parenthesized expression is redundant when it wraps an atomic expression — an identifier,
+member-access chain of atomic expressions, `self`, `super`, or a simple literal. Atoms have
+no operators, so no precedence or tuple-shape rule can distinguish the parenthesized and
+unparenthesized forms. Parentheses with any other contents (operators, calls, casts, real
+tuples, labeled or trailing-comma single-element tuples, operator references like `(+)`) are
+left alone. The outermost parenthesized layer of an `if`/`guard`/`while`/`switch`/`repeat`
+condition is left to the `NoParensAroundConditions` rule; nested layers inside it are still
+unwrapped here.
+
+Lint: Parentheses around an atomic expression yield one lint error per redundant layer.
+
+Format: All redundant layers are removed in a single pass, with the finding reported on the
+        outermost layer. A layer containing a comment is kept and only its lint error is
+        emitted; comment-free layers beneath a kept layer may still be unwrapped.
+
+`RedundantParens` rule can format your code automatically.
+
+### RedundantRawString
+
+Rewrites raw string literals to their minimal delimiters.
+
+A raw string literal whose text contains no double quote and no backslash needs no escaping,
+so its `#` delimiters are removed and the literal becomes an ordinary string; interpolation
+delimiters lose their pound signs in tandem. A literal with more than one `#` has them
+reduced to the smallest count that still keeps every double quote in the text from closing
+the literal early or forming a malformed closing delimiter. Multiline literals are checked the same
+way, which declines some reductions that would in fact be safe. Literals whose text contains a backslash, or that contain
+parse errors, are never rewritten: pound signs also govern escapes and interpolation inside
+raw strings, and damaged literals cannot be checked reliably. Rewriting continues into the
+literal's interpolations, so literals nested there are rewritten in the same pass. The
+literal's value is preserved exactly in every rewrite.
+
+Lint: A raw string literal that does not use its minimal delimiters yields a lint error.
+
+Format: The literal is rewritten with minimal delimiters.
+
+`RedundantRawString` rule can format your code automatically.
 
 ### RedundantSelf
 
