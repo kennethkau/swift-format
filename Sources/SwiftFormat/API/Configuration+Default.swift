@@ -52,6 +52,8 @@ extension Configuration {
     self.indentBlankLines = false
     self.orderedImports = OrderedImportsConfiguration()
     self.swiftTestingNamingConventions = SwiftTestingNamingConventionsConfiguration()
+    self.fileHeader = FileHeaderConfiguration()
+    self.reflowComments = ReflowCommentsConfiguration()
     self.blankLinePolicy = BlankLinePolicyConfiguration()
     self.iterateToFixpoint = false
   }

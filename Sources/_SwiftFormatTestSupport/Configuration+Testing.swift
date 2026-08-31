@@ -53,6 +53,8 @@ extension Configuration {
     config.orderedImports = OrderedImportsConfiguration()
     config.blankLinePolicy = BlankLinePolicyConfiguration()
     config.swiftTestingNamingConventions = SwiftTestingNamingConventionsConfiguration()
+    config.fileHeader = FileHeaderConfiguration()
+    config.reflowComments = ReflowCommentsConfiguration()
     return config
   }
 
