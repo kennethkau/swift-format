@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2023 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2026 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -36,6 +36,8 @@ public struct Configuration: Codable, Equatable {
     case lineBreakBeforeEachArgument
     case lineBreakBeforeEachGenericRequirement
     case lineBreakBetweenDeclarationAttributes
+    case lineBreakBeforeEachChainComponent
+    case attachLoneDeclarationAttributes
     case prioritizeKeepingFunctionOutputTogether
     case indentConditionalCompilationBlocks
     case lineBreakAroundMultilineExpressionChainComponents
@@ -46,10 +48,16 @@ public struct Configuration: Codable, Equatable {
     case noAssignmentInExpressions
     case multilineTrailingCommaBehavior
     case multiElementCollectionTrailingCommas
+    case collectionElementLayout
+    case magicTrailingComma
+    case forceBrokenArgumentsInMultilineArrayLiterals
+    case forceBrokenClosureBodies
+    case forceBrokenCodeBlockBodies
     case reflowMultilineStringLiterals
     case indentBlankLines
     case orderedImports
     case swiftTestingNamingConventions
+    case iterateToFixpoint
   }
 
   /// A dictionary containing the default enabled/disabled states of rules, keyed by the rules'
@@ -123,6 +131,25 @@ public struct Configuration: Codable, Equatable {
 
   /// If true, a line break will be added between adjacent attributes.
   public var lineBreakBetweenDeclarationAttributes: Bool
+
+  /// Determines the line-breaking behavior for the components of a call chain — a chain
+  /// containing a function call or subscript, such as `Text(…).font(…).padding(…)` in SwiftUI
+  /// code.
+  ///
+  /// If true, a line break is added before every chain component that follows a call, even when
+  /// the whole chain would fit on one line. Components not preceded by a call are unaffected.
+  /// If false (the default), chain components are laid out horizontally first, with line breaks
+  /// fired only when the line length is exceeded.
+  public var lineBreakBeforeEachChainComponent: Bool
+
+  /// Determines whether a lone declaration attribute shares its declaration's line instead of
+  /// being placed on its own line, refining `lineBreakBetweenDeclarationAttributes`.
+  ///
+  /// When enabled, two or more attributes still go one per line, but a single attribute stays
+  /// attached to its declaration, breaking only when the line length requires it. It has no
+  /// effect unless attributes are separated one per line; for macro declarations that separation
+  /// is keyed to `lineBreakBeforeEachArgument` instead.
+  public var attachLoneDeclarationAttributes: Bool
 
   /// Determines if function-like declaration outputs should be prioritized to be together with the
   /// function signature's right (closing) parenthesis.
@@ -214,6 +241,76 @@ public struct Configuration: Codable, Equatable {
   /// ]
   /// ```
   public var multiElementCollectionTrailingCommas: Bool
+
+  /// Determines how elements of collection literals are laid out when the literal spans multiple
+  /// lines.
+  public enum CollectionElementLayout: String, Codable, CaseIterable {
+    /// Broken collection literals may pack multiple elements per line, filling each line up to
+    /// the line length.
+    case binPack
+
+    /// Broken collection literals place each element on its own line.
+    case onePerLine
+
+    /// Like `onePerLine`, except collection literals whose elements are all short simple scalar
+    /// literals (numbers — including a single leading sign — booleans, `nil`, single-line string
+    /// literals, and bare enum cases, each at most 10 bytes wide and not preceded by a comment)
+    /// are packed multiple elements per line. For dictionary literals, each key and each value
+    /// must independently satisfy those constraints.
+    case fillShortLiterals
+  }
+
+  /// Determines how elements of collection literals (arrays and dictionaries) are laid out when
+  /// the literal spans multiple lines. See `CollectionElementLayout` for the available layouts.
+  public var collectionElementLayout: CollectionElementLayout
+
+  /// Determines whether a trailing comma after the last element of a collection literal, function
+  /// call argument list, or function/enum-case/closure parameter list forces the list to break
+  /// one element per line, even when the list would fit on a single line.
+  ///
+  /// This matches Black's "magic trailing comma" behavior. The comma is honored only when the
+  /// list fits on the line where it starts — otherwise it cannot be distinguished from a comma
+  /// the formatter added itself — and a comma that forced the layout is preserved even when
+  /// trailing commas would otherwise be removed. Exceptions:
+  ///
+  /// - A trailing comma on the sole compactly arranged argument of a call never forces the
+  ///   vertical layout; the comma is then handled like any single-element trailing comma.
+  /// - A single-element trailing comma is never added, and is kept whenever `magicTrailingComma`
+  ///   is enabled; otherwise it is removed, except where `multilineTrailingCommaBehavior`
+  ///   leaves trailing commas as written.
+  /// - A list containing comments has its fits test computed from the group's conservative
+  ///   width, because a comment's width depends on the layout around it.
+  public var magicTrailingComma: Bool
+
+  /// Determines whether the argument lists of function-call elements in an array literal are
+  /// broken one argument per line when the array literal spans multiple lines.
+  ///
+  /// Verticality propagates inward from the literal's actual emitted layout (including manual
+  /// breaks when author line breaks are preserved), so the decision is stable across formatting
+  /// passes. Only calls with at least two arguments are affected; a single-argument call cannot
+  /// be partially wrapped, so breaking it open adds no determinism.
+  public var forceBrokenArgumentsInMultilineArrayLiterals: Bool
+
+  /// Determines whether closures containing at least one statement are always laid out vertically
+  /// — each statement on its own line, with the closing brace on its own line — even when the
+  /// entire closure would fit on a single line.
+  ///
+  /// This applies to every closure regardless of context, including nested single-statement
+  /// closures. Empty closures and closures with no statements are unaffected. The default behavior
+  /// already breaks open closures with multiple statements; this option extends that behavior to
+  /// single-statement closures.
+  public var forceBrokenClosureBodies: Bool
+
+  /// Determines whether code blocks — the brace-delimited statement bodies of declarations and
+  /// control-flow statements, explicit accessor bodies (e.g. `get { … }`), and switch case
+  /// statement lists — are always laid out vertically, even when the entire body would fit on a
+  /// single line.
+  ///
+  /// With this option enabled, `if x { y() }` and `func f() { bar() }` are each broken onto
+  /// three lines. Empty bodies are unaffected, and a single-statement body containing a closure
+  /// composes with `forceBrokenClosureBodies`. Type member blocks and implicit single-expression
+  /// accessors (e.g. `var h: Int { 5 }`) are not code blocks and are out of scope.
+  public var forceBrokenCodeBlockBodies: Bool
 
   /// Determines how multiline string literals should reflow when formatted.
   public enum MultilineStringReflowBehavior: String, Codable {
@@ -311,6 +408,18 @@ public struct Configuration: Codable, Equatable {
   /// Configuration for the `SwiftTestingNamingConventions` rule.
   public var swiftTestingNamingConventions: SwiftTestingNamingConventionsConfiguration
 
+  /// Determines whether formatting iterates until the output stops changing.
+  ///
+  /// Rule interactions can occasionally produce output that changes again when formatted a second
+  /// time. When this setting is true, the formatter repeats the entire format pass — rules and
+  /// pretty printing — until the output is a fixed point, and throws an error if it fails to
+  /// converge within a bounded number of passes instead of silently returning unstable output.
+  /// Line and offset selections are excluded because their ranges are not valid for the
+  /// formatted text of later passes, and the syntax-tree-based format entry point always
+  /// performs a single pass. When false (the default), exactly one pass is performed, matching
+  /// the formatter's existing single-pass behavior.
+  public var iterateToFixpoint: Bool
+
   /// Creates a new `Configuration` by loading it from a configuration file.
   public init(contentsOf url: URL) throws {
     let data = try Data(contentsOf: url)
@@ -360,6 +469,24 @@ public struct Configuration: Codable, Equatable {
     self.tabWidth =
       try container.decodeIfPresent(Int.self, forKey: .tabWidth)
       ?? defaults.tabWidth
+    // Nonsense geometry would otherwise trap deep inside the pretty printer; reject it at the
+    // configuration boundary with an actionable error instead.
+    guard self.lineLength > 0 else {
+      throw DecodingError.dataCorrupted(
+        .init(
+          codingPath: container.codingPath + [CodingKeys.lineLength],
+          debugDescription: "'lineLength' must be a positive integer."
+        )
+      )
+    }
+    guard self.tabWidth > 0 else {
+      throw DecodingError.dataCorrupted(
+        .init(
+          codingPath: container.codingPath + [CodingKeys.tabWidth],
+          debugDescription: "'tabWidth' must be a positive integer."
+        )
+      )
+    }
     self.indentation =
       try container.decodeIfPresent(Indent.self, forKey: .indentation)
       ?? defaults.indentation
@@ -378,6 +505,12 @@ public struct Configuration: Codable, Equatable {
     self.lineBreakBetweenDeclarationAttributes =
       try container.decodeIfPresent(Bool.self, forKey: .lineBreakBetweenDeclarationAttributes)
       ?? defaults.lineBreakBetweenDeclarationAttributes
+    self.lineBreakBeforeEachChainComponent =
+      try container.decodeIfPresent(Bool.self, forKey: .lineBreakBeforeEachChainComponent)
+      ?? defaults.lineBreakBeforeEachChainComponent
+    self.attachLoneDeclarationAttributes =
+      try container.decodeIfPresent(Bool.self, forKey: .attachLoneDeclarationAttributes)
+      ?? defaults.attachLoneDeclarationAttributes
     self.prioritizeKeepingFunctionOutputTogether =
       try container.decodeIfPresent(Bool.self, forKey: .prioritizeKeepingFunctionOutputTogether)
       ?? defaults.prioritizeKeepingFunctionOutputTogether
@@ -420,6 +553,24 @@ public struct Configuration: Codable, Equatable {
         forKey: .multiElementCollectionTrailingCommas
       )
       ?? defaults.multiElementCollectionTrailingCommas
+    self.collectionElementLayout =
+      try container.decodeIfPresent(CollectionElementLayout.self, forKey: .collectionElementLayout)
+      ?? defaults.collectionElementLayout
+    self.magicTrailingComma =
+      try container.decodeIfPresent(Bool.self, forKey: .magicTrailingComma)
+      ?? defaults.magicTrailingComma
+    self.forceBrokenArgumentsInMultilineArrayLiterals =
+      try container.decodeIfPresent(
+        Bool.self,
+        forKey: .forceBrokenArgumentsInMultilineArrayLiterals
+      )
+      ?? defaults.forceBrokenArgumentsInMultilineArrayLiterals
+    self.forceBrokenClosureBodies =
+      try container.decodeIfPresent(Bool.self, forKey: .forceBrokenClosureBodies)
+      ?? defaults.forceBrokenClosureBodies
+    self.forceBrokenCodeBlockBodies =
+      try container.decodeIfPresent(Bool.self, forKey: .forceBrokenCodeBlockBodies)
+      ?? defaults.forceBrokenCodeBlockBodies
 
     self.reflowMultilineStringLiterals = try {
       // Try to decode `reflowMultilineStringLiterals` as a string
@@ -467,6 +618,10 @@ public struct Configuration: Codable, Equatable {
       )
       ?? defaults.swiftTestingNamingConventions
 
+    self.iterateToFixpoint =
+      try container.decodeIfPresent(Bool.self, forKey: .iterateToFixpoint)
+      ?? defaults.iterateToFixpoint
+
     // If the `rules` key is not present at all, default it to the built-in set
     // so that the behavior is the same as if the configuration had been
     // default-initialized. To get an empty rules dictionary, one can explicitly
@@ -492,6 +647,8 @@ public struct Configuration: Codable, Equatable {
     try container.encode(prioritizeKeepingFunctionOutputTogether, forKey: .prioritizeKeepingFunctionOutputTogether)
     try container.encode(indentConditionalCompilationBlocks, forKey: .indentConditionalCompilationBlocks)
     try container.encode(lineBreakBetweenDeclarationAttributes, forKey: .lineBreakBetweenDeclarationAttributes)
+    try container.encode(lineBreakBeforeEachChainComponent, forKey: .lineBreakBeforeEachChainComponent)
+    try container.encode(attachLoneDeclarationAttributes, forKey: .attachLoneDeclarationAttributes)
     try container.encode(
       lineBreakAroundMultilineExpressionChainComponents,
       forKey: .lineBreakAroundMultilineExpressionChainComponents
@@ -504,11 +661,20 @@ public struct Configuration: Codable, Equatable {
     try container.encode(indentSwitchCaseLabels, forKey: .indentSwitchCaseLabels)
     try container.encode(noAssignmentInExpressions, forKey: .noAssignmentInExpressions)
     try container.encode(multiElementCollectionTrailingCommas, forKey: .multiElementCollectionTrailingCommas)
+    try container.encode(collectionElementLayout, forKey: .collectionElementLayout)
+    try container.encode(magicTrailingComma, forKey: .magicTrailingComma)
+    try container.encode(
+      forceBrokenArgumentsInMultilineArrayLiterals,
+      forKey: .forceBrokenArgumentsInMultilineArrayLiterals
+    )
+    try container.encode(forceBrokenClosureBodies, forKey: .forceBrokenClosureBodies)
+    try container.encode(forceBrokenCodeBlockBodies, forKey: .forceBrokenCodeBlockBodies)
     try container.encode(multilineTrailingCommaBehavior, forKey: .multilineTrailingCommaBehavior)
     try container.encode(reflowMultilineStringLiterals, forKey: .reflowMultilineStringLiterals)
     try container.encode(indentBlankLines, forKey: .indentBlankLines)
     try container.encode(orderedImports, forKey: .orderedImports)
     try container.encode(swiftTestingNamingConventions, forKey: .swiftTestingNamingConventions)
+    try container.encode(iterateToFixpoint, forKey: .iterateToFixpoint)
     try container.encode(rules, forKey: .rules)
   }
 

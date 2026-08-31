@@ -132,6 +132,20 @@ public class PrettyPrinter {
   /// corresponding end token are encountered.
   private var commaDelimitedRegionStack: [Int] = []
 
+  /// For each open comma-delimited region, whether a magic trailing comma caused the region to
+  /// break one element per line. Parallel to `commaDelimitedRegionStack`.
+  private var commaForcedRegionStack: [Bool] = []
+
+  /// Whether the most recent comma-forced break (see `NewlineBehavior.commaForced`) fired because
+  /// its group fits on the current line. It is claimed by the `.open` token of that group, which
+  /// forwards it to `pendingCommaForcedRegionFire`.
+  private var pendingCommaForcedGroupFire = false
+
+  /// Whether the most recently opened comma-forced group fired, awaiting the claim by the
+  /// `.commaDelimitedRegionStart` token of the list that contains it, so that a trailing comma
+  /// which forced a vertical layout is never removed from the output.
+  private var pendingCommaForcedRegionFire = false
+
   /// Tracks how many printer control tokens to suppress firing breaks are active.
   private var activeBreakSuppressionCount = 0
 
@@ -175,6 +189,14 @@ public class PrettyPrinter {
   /// the break as being located at the end of the previous line.
   private var openCloseBreakCompensatingLineNumber: Int {
     return outputBuffer.lineNumber - (outputBuffer.isAtStartOfLine ? 1 : 0)
+  }
+
+  /// Returns whether the innermost active comma-delimited region has already broken onto multiple
+  /// lines — i.e. the printer has emitted a line break since the region started. This is the
+  /// condition that propagates a vertical enclosing list's layout inward to registered lists.
+  private var innermostCommaDelimitedRegionIsMultiline: Bool {
+    let currentLine = openCloseBreakCompensatingLineNumber
+    return (commaDelimitedRegionStack.last ?? currentLine) != currentLine
   }
 
   /// Creates a new PrettyPrinter with the provided formatting configuration.
@@ -242,13 +264,32 @@ public class PrettyPrinter {
     // the group.
     case .open(let breaktype):
       // Determine if the break tokens in this group need to be forced.
-      if !canFit(length) || lastBreak, case .consistent = breaktype {
-        forceBreakStack.append(true)
+      if case .commaForced(let base) = breaktype {
+        // A magic trailing comma forces one element per line only when the group fits on the line
+        // where it starts (`pendingCommaForcedGroupFire`); a list that does not fit would have
+        // broken on its own, and the formatter may have added the comma itself.
+        let fired = pendingCommaForcedGroupFire
+        pendingCommaForcedGroupFire = false
+        pendingCommaForcedRegionFire = fired
+        forceBreakStack.append(fired || shouldForceGroupBreak(base, length: length))
+      } else if case .enclosingListForced(let base) = breaktype {
+        // Verticality propagation: the group breaks one element per line iff the innermost
+        // enclosing comma-delimited region has already broken onto multiple lines. The condition
+        // is evaluated here directly — nothing between the leading break and this token changes
+        // the region state — so no pending-flag handoff is needed.
+        forceBreakStack.append(
+          innermostCommaDelimitedRegionIsMultiline || shouldForceGroupBreak(base, length: length)
+        )
       } else {
-        forceBreakStack.append(false)
+        forceBreakStack.append(shouldForceGroupBreak(breaktype, length: length))
       }
 
     case .close:
+      // If a comma-forced group's fire is still pending here, the list it opened has no
+      // comma-delimited region of its own (e.g. a closure parameter list): the region start of a
+      // list that has one always precedes any group close inside it. The fire must not leak to an
+      // unrelated later region, so it is discarded.
+      pendingCommaForcedRegionFire = false
       forceBreakStack.removeLast()
 
     // Create a line break if needed. Calculate the indentation required and adjust spaceRemaining
@@ -425,9 +466,31 @@ public class PrettyPrinter {
       }
 
       var overrideBreakingSuppressed = false
+      var commaForcedFits = false
       switch newline {
-      case .elective, .escaped: break
-      case .soft(_, let discretionary):
+      case .elective, .electiveIgnoringGroupLength, .escaped: break
+      case .commaForced:
+        // A magic trailing comma's break has its comma-forcing effect iff the group opened by the
+        // immediately following `.open` token fits on the current line: the formatter adds
+        // trailing commas only to lists that end up spanning multiple lines, so on a list that
+        // fits, the comma is taken as the author's deliberate signal. (Like an elective break, it
+        // may also fire on its own for width reasons, without setting the fire flag.)
+        if idx + 1 < tokens.count, case .open(.commaForced) = tokens[idx + 1],
+          canFit(compactGroupWidth(openIndex: idx + 1) ?? lengths[idx + 1])
+        {
+          commaForcedFits = true
+          mustBreak = true
+        }
+      case .enclosingListForced:
+        // Verticality propagation: a break registered for propagation fires iff the innermost
+        // enclosing comma-delimited region has already broken onto multiple lines — the enclosing
+        // list is laid out vertically — which propagates that vertical layout inward. This
+        // covers both the leading break of a registered argument list and the element separator
+        // before a registered array-literal element.
+        if innermostCommaDelimitedRegionIsMultiline {
+          mustBreak = true
+        }
+      case .soft(_, let discretionary), .softIgnoringGroupLength(_, let discretionary):
         // A discretionary newline (i.e. from the source) should create a line break even if the
         // rules for breaking are disabled.
         overrideBreakingSuppressed =
@@ -441,6 +504,9 @@ public class PrettyPrinter {
 
       let suppressBreaking = isBreakingSuppressed && !overrideBreakingSuppressed
       if !suppressBreaking && (!canFit(length) || mustBreak) {
+        if commaForcedFits {
+          pendingCommaForcedGroupFire = true
+        }
         currentLineIsContinuation = isContinuationIfBreakFires
         if case .escaped = newline {
           outputBuffer.enqueueSpaces(size)
@@ -511,21 +577,39 @@ public class PrettyPrinter {
 
     case .commaDelimitedRegionStart:
       commaDelimitedRegionStack.append(openCloseBreakCompensatingLineNumber)
+      commaForcedRegionStack.append(pendingCommaForcedRegionFire)
+      pendingCommaForcedRegionFire = false
 
     case .commaDelimitedRegionEnd(let isCollection, let hasTrailingComma, let isSingleElement):
       guard let startLineNumber = commaDelimitedRegionStack.popLast() else {
         fatalError("Found trailing comma end with no corresponding start.")
       }
+      guard let commaForcedFire = commaForcedRegionStack.popLast() else {
+        fatalError("Found trailing comma end with no corresponding comma-forced state.")
+      }
 
-      // We need to specifically disable trailing commas on elements of single item collections.
-      // The syntax library can't distinguish a collection's initializer (where the elements are
-      // types) from a literal (where the elements are the contents of a collection instance).
-      // We never want to add a trailing comma in an initializer so we disable trailing commas on
-      // single element collections.
+      // A trailing comma is never *added* to a single-element collection: the syntax library
+      // can't distinguish a collection literal from a generic initializer, where the comma would
+      // change the meaning. An author-written comma on a sole element is still honored when
+      // `magicTrailingComma` is enabled; see the exception below.
+      let keepsAuthorComma = isSingleElement && hasTrailingComma && configuration.magicTrailingComma
       if let shouldHandleCommaDelimitedRegion = shouldHandleCommaDelimitedRegion(isCollection: isCollection) {
-        let shouldHaveTrailingComma =
+        var shouldHaveTrailingComma =
           startLineNumber != openCloseBreakCompensatingLineNumber && !isSingleElement
           && shouldHandleCommaDelimitedRegion
+        // A comma that forced the region to break is load-bearing: removing it would relayout
+        // the list on the next pass, so it survives even when commas are otherwise removed.
+        if commaForcedFire && startLineNumber != openCloseBreakCompensatingLineNumber {
+          shouldHaveTrailingComma = true
+        }
+        // A comma after a region's sole element is never added — the syntax library cannot
+        // distinguish a literal from an initializer, where it would change meaning — but an
+        // author-written one is a layout signal under magic trailing commas and is kept,
+        // subsuming the load-bearing case above. With magic disabled it is removed and
+        // diagnosed.
+        if keepsAuthorComma {
+          shouldHaveTrailingComma = true
+        }
         if shouldHaveTrailingComma && !hasTrailingComma {
           diagnose(.addTrailingComma, category: .trailingComma)
         } else if !shouldHaveTrailingComma && hasTrailingComma {
@@ -577,6 +661,59 @@ public class PrettyPrinter {
     return outputBuffer.isAtStartOfLine || length <= spaceRemaining
   }
 
+  /// Indicates whether a group with the given base break style must have all of its breaks
+  /// finalized as newlines, either because the group (whose total printed width is `length`) does
+  /// not fit on the current line or because the line was already broken.
+  private func shouldForceGroupBreak(_ breaktype: GroupBreakStyle, length: Int) -> Bool {
+    guard case .consistent = breaktype else {
+      return false
+    }
+    return !canFit(length) || lastBreak
+  }
+
+  /// Computes the width the group opened by the `.open` token at `openIndex` would occupy if it
+  /// were printed on a single line, counting each break only as the spaces it prints when it does
+  /// not fire.
+  ///
+  /// Unlike the group's precomputed length, this is the width relevant to the magic trailing
+  /// comma decision. Returns nil if the group contains tokens whose single-line width cannot be
+  /// determined this way.
+  private func compactGroupWidth(openIndex: Int) -> Int? {
+    var depth = 0
+    var width = 0
+    var i = openIndex + 1
+    while i < tokens.count {
+      switch tokens[i] {
+      case .open:
+        depth += 1
+      case .close:
+        if depth == 0 {
+          return width
+        }
+        depth -= 1
+      case .break(_, let size, _):
+        width += size
+      case .syntax(let text):
+        width += text.count
+      case .space(let size, _):
+        width += size
+      case .commaDelimitedRegionEnd:
+        // A trailing comma is only written when the region spans multiple lines, and this width
+        // describes the single-line layout.
+        break
+      case .comment, .verbatim, .enableFormatting, .disableFormatting:
+        // The width of these tokens depends on the layout around them; the caller falls back to
+        // the precomputed group length.
+        return nil
+      case .printerControl, .commaDelimitedRegionStart, .contextualBreakingStart,
+        .contextualBreakingEnd:
+        break
+      }
+      i += 1
+    }
+    return nil
+  }
+
   /// Scan over the array of Tokens and calculate their lengths.
   ///
   /// This method is based on the `scan` function described in Derek Oppen's "Pretty Printing" paper
@@ -586,6 +723,9 @@ public class PrettyPrinter {
   public func prettyPrint() -> String {
     // Keep track of the indices of the .open and .break token locations.
     var delimIndexStack = [Int]()
+    // Keep track of the delimiter stack at the start of each comma-delimited region. Delimiters
+    // that remain active through the end of a region decide whether that region becomes multiline.
+    var commaDelimitedRegionDelimiterStack = [[Int]]()
     // Keep a running total of the token lengths.
     var total = 0
 
@@ -667,8 +807,15 @@ public class PrettyPrinter {
         delimIndexStack.append(i)
 
         switch newline {
-        case .elective, .escaped:
+        case .elective, .electiveIgnoringGroupLength, .softIgnoringGroupLength, .escaped,
+          .enclosingListForced:
           total += size
+        case .commaForced:
+          // A comma-forced break fires whenever the group it opens fits on the current line, and
+          // in that case the group's contents are laid out vertically. Inflating the enclosing
+          // widths like a required newline lets enclosing breaks anticipate that, so they don't
+          // leave the list hanging at the end of a line it doesn't fit on.
+          total += maxLineLength
         default:
           // `size` is never used in this case, because the break always fires. Use `maxLineLength`
           // to ensure enclosing groups are large enough to force preceding breaks to fire.
@@ -700,17 +847,28 @@ public class PrettyPrinter {
 
       case .commaDelimitedRegionStart:
         lengths.append(0)
+        commaDelimitedRegionDelimiterStack.append(delimIndexStack)
 
-      case .commaDelimitedRegionEnd(let isCollection, _, let isSingleElement):
-        // The token's length is only necessary when a comma will be printed, but it's impossible to
-        // know at this point whether the region-start token will be on the same line as this token.
-        // Without adding this length to the total, it would be possible for this comma to be
-        // printed in column `maxLineLength`. Unfortunately, this can cause breaks to fire
-        // unnecessarily when the enclosed tokens comma would fit within `maxLineLength`.
-        if shouldHandleCommaDelimitedRegion(isCollection: isCollection) == true {
-          let length = isSingleElement ? 0 : 1
-          total += length
-          lengths.append(length)
+      case .commaDelimitedRegionEnd(let isCollection, let hasTrailingComma, let isSingleElement):
+        guard let delimiterIndicesAtStart = commaDelimitedRegionDelimiterStack.popLast() else {
+          fatalError("Found trailing comma end with no corresponding start.")
+        }
+
+        // A trailing comma is only written when the region breaks across multiple lines (always
+        // for multi-element regions, or when the author's single-element comma is kept). Exclude
+        // its width from delimiters that enclose the entire region so it cannot cause that first
+        // break, while retaining the width in nested break lengths that must reserve space once
+        // the region is multiline.
+        let keepsAuthorComma = isSingleElement && hasTrailingComma && configuration.magicTrailingComma
+        if shouldHandleCommaDelimitedRegion(isCollection: isCollection) == true
+          && (!isSingleElement || keepsAuthorComma)
+        {
+          for (startIndex, endIndex) in zip(delimiterIndicesAtStart, delimIndexStack) {
+            guard startIndex == endIndex else { break }
+            lengths[startIndex] -= 1
+          }
+          total += 1
+          lengths.append(1)
         } else {
           lengths.append(0)
         }
@@ -782,6 +940,10 @@ public class PrettyPrinter {
         print("[OPEN Consistent Length: \(length) Idx: \(idx)]")
       case .inconsistent:
         print("[OPEN Inconsistent Length: \(length) Idx: \(idx)]")
+      case .commaForced:
+        print("[OPEN CommaForced Length: \(length) Idx: \(idx)]")
+      case .enclosingListForced:
+        print("[OPEN EnclosingListForced Length: \(length) Idx: \(idx)]")
       }
       debugIndent.append(.spaces(2))
 

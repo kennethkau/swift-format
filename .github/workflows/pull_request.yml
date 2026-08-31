@@ -25,7 +25,7 @@ jobs:
     uses: swiftlang/github-workflows/.github/workflows/soundness.yml@0.0.15
     with:
       license_header_check_project_name: "Swift.org"
-      # This fork intentionally extends the public API (canonical formatting rules), so the API
+      # This fork adds additional formatting rules, so the API
       # breakage check against upstream tags cannot pass; it also crashes on fork checkouts.
       api_breakage_check_enabled: false
       # The unacceptable-language check script fails to run in this fork's environment; language

@@ -97,13 +97,8 @@ public final class Context {
     self.ruleNameCache = ruleNameCache
   }
 
-  /// Given a rule's name and the node it is examining, determine if the rule is disabled at this
-  /// location or not. Also makes sure the entire node is contained inside any selection.
-  func shouldFormat<R: Rule>(_ rule: R.Type, node: Syntax) -> Bool {
-    guard node.isInsideSelection(selection) else { return false }
-
-    let loc = node.startLocation(converter: self.sourceLocationConverter)
-
+  /// The rule's cached name, asserting that the generator-produced cache was injected.
+  private func cachedRuleName<R: Rule>(_ rule: R.Type) -> String {
     assert(
       ruleNameCache[ObjectIdentifier(rule)] != nil,
       """
@@ -111,11 +106,24 @@ public final class Context {
       Ensure `generate-swift-format` has been run and `ruleNameCache` was injected.
       """
     )
+    return ruleNameCache[ObjectIdentifier(rule)] ?? R.ruleName
+  }
 
-    let ruleName = ruleNameCache[ObjectIdentifier(rule)] ?? R.ruleName
-    switch ruleMask.ruleState(ruleName, at: loc) {
+  /// Whether the rule is turned on by the configuration, independent of any location-based
+  /// masking.
+  func isRuleEnabled<R: Rule>(_ rule: R.Type) -> Bool {
+    configuration.rules[cachedRuleName(rule)] ?? false
+  }
+
+  /// Given a rule's name and the node it is examining, determine if the rule is disabled at this
+  /// location or not. Also makes sure the entire node is contained inside any selection.
+  func shouldFormat<R: Rule>(_ rule: R.Type, node: Syntax) -> Bool {
+    guard node.isInsideSelection(selection) else { return false }
+
+    let loc = node.startLocation(converter: self.sourceLocationConverter)
+    switch ruleMask.ruleState(cachedRuleName(rule), at: loc) {
     case .default:
-      return configuration.rules[ruleName] ?? false
+      return isRuleEnabled(rule)
     case .disabled:
       return false
     }

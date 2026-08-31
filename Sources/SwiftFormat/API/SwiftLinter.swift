@@ -50,7 +50,8 @@ public final class SwiftLinter {
   /// - Parameters:
   ///   - url: The URL of the file containing the code to format.
   ///   - parsingDiagnosticHandler: An optional callback that will be notified if there are any
-  ///     errors when parsing the source code.
+  ///     errors when parsing the source code. Source that does not parse is rejected whether or
+  ///     not a handler is installed; the handler only controls whether diagnostics are reported.
   /// - Throws: If an unrecoverable error occurs when formatting the code.
   public func lint(
     contentsOf url: URL,
@@ -86,7 +87,8 @@ public final class SwiftLinter {
   ///     features in `SwiftParser`'s `Parser.LanguageFeatures` enum, which match the spelling
   ///     defined in the compiler's `Features.def` file.
   ///   - parsingDiagnosticHandler: An optional callback that will be notified if there are any
-  ///     errors when parsing the source code.
+  ///     errors when parsing the source code. Source that does not parse is rejected whether or
+  ///     not a handler is installed; the handler only controls whether diagnostics are reported.
   /// - Throws: If an unrecoverable error occurs when formatting the code.
   public func lint(
     source: String,

@@ -33,6 +33,8 @@ extension Configuration {
     config.lineBreakBeforeControlFlowKeywords = false
     config.lineBreakBeforeEachArgument = false
     config.lineBreakBeforeEachGenericRequirement = false
+    config.lineBreakBeforeEachChainComponent = false
+    config.attachLoneDeclarationAttributes = false
     config.prioritizeKeepingFunctionOutputTogether = false
     config.indentConditionalCompilationBlocks = true
     config.lineBreakAroundMultilineExpressionChainComponents = false
@@ -41,7 +43,14 @@ extension Configuration {
     config.spacesAroundRangeFormationOperators = false
     config.noAssignmentInExpressions = NoAssignmentInExpressionsConfiguration()
     config.multiElementCollectionTrailingCommas = true
+    config.collectionElementLayout = .binPack
+    config.magicTrailingComma = false
+    config.forceBrokenArgumentsInMultilineArrayLiterals = false
+    config.forceBrokenClosureBodies = false
+    config.forceBrokenCodeBlockBodies = false
     config.indentBlankLines = false
+    config.iterateToFixpoint = false
+    config.orderedImports = OrderedImportsConfiguration()
     config.swiftTestingNamingConventions = SwiftTestingNamingConventionsConfiguration()
     return config
   }

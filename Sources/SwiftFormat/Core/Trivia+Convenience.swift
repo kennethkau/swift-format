@@ -176,4 +176,38 @@ extension Trivia {
 
     return (Trivia(pieces: pieces), trimmmed)
   }
+
+  /// Returns the indentation width, in columns, of the run of space and tab trivia that immediately
+  /// precedes the element at `index`.
+  ///
+  /// Each tab advances the width to the next multiple of `tabWidth` columns, matching a
+  /// terminal's tab stops. The run ends at the first piece that is neither spaces nor tabs, or
+  /// at the start of the collection.
+  func indentWidth(before index: Int, tabWidth: Int) -> Int {
+    // Tab stops depend on the columns consumed to their left, so measure the run from its start.
+    var start = index
+    scanning: while start > startIndex {
+      switch self[start - 1] {
+      case .spaces, .tabs:
+        start -= 1
+      default:
+        break scanning
+      }
+    }
+
+    var width = 0
+    var j = start
+    while j < index {
+      switch self[j] {
+      case .spaces(let count):
+        width += count
+      case .tabs(let count):
+        width = (width / tabWidth + count) * tabWidth
+      default:
+        break
+      }
+      j += 1
+    }
+    return width
+  }
 }

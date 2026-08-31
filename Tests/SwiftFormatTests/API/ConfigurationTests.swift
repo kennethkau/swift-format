@@ -135,4 +135,51 @@ final class ConfigurationTests: XCTestCase {
     XCTAssertEqual(config, expected)
     #endif
   }
+
+  func testCollectionElementLayoutDecodesFromStringValues() throws {
+    let jsonDecoder = JSONDecoder()
+    let testCases: [(String, Configuration.CollectionElementLayout)] = [
+      (#"{"collectionElementLayout": "binPack"}"#, .binPack),
+      (#"{"collectionElementLayout": "onePerLine"}"#, .onePerLine),
+      (#"{"collectionElementLayout": "fillShortLiterals"}"#, .fillShortLiterals),
+    ]
+
+    for (json, expected) in testCases {
+      let config = try jsonDecoder.decode(Configuration.self, from: json.data(using: .utf8)!)
+      XCTAssertEqual(config.collectionElementLayout, expected)
+    }
+  }
+
+  func testCollectionElementLayoutDefaultsToBinPackWhenAbsent() throws {
+    let jsonDecoder = JSONDecoder()
+    let config = try jsonDecoder.decode(Configuration.self, from: "{}".data(using: .utf8)!)
+    XCTAssertEqual(config.collectionElementLayout, .binPack)
+  }
+
+  func testInvalidCollectionElementLayoutThrows() throws {
+    let jsonDecoder = JSONDecoder()
+    XCTAssertThrowsError(
+      try jsonDecoder.decode(
+        Configuration.self,
+        from: #"{"collectionElementLayout": "diagonal"}"#.data(using: .utf8)!
+      )
+    )
+  }
+
+  func testNonDefaultOptionValuesRoundTripThroughCodable() throws {
+    var config = Configuration()
+    config.collectionElementLayout = .fillShortLiterals
+    config.lineBreakBeforeEachChainComponent = true
+    config.magicTrailingComma = true
+    config.forceBrokenArgumentsInMultilineArrayLiterals = true
+    config.attachLoneDeclarationAttributes = true
+    config.forceBrokenClosureBodies = true
+    config.forceBrokenCodeBlockBodies = true
+
+    let data = try JSONEncoder()
+      .encode(config)
+    let decoded = try JSONDecoder()
+      .decode(Configuration.self, from: data)
+    XCTAssertEqual(decoded, config)
+  }
 }

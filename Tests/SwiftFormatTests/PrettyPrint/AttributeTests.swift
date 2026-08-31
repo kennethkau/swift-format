@@ -682,4 +682,103 @@ final class AttributeTests: PrettyPrintTestCase {
 
     assertPrettyPrintEqual(input: input, expected: expected, linelength: 45)
   }
+
+  func testLoneAttributeOnOwnLineWhenAttachDisabled() {
+    // Upstream behavior: with lineBreakBetweenDeclarationAttributes alone, even a lone
+    // attribute is placed on its own line.
+    let input = "@MainActor func load() {}"
+    let expected = """
+      @MainActor
+      func load() {}
+
+      """
+    var configuration = Configuration.forTesting
+    configuration.lineBreakBetweenDeclarationAttributes = true
+    assertPrettyPrintEqual(
+      input: input,
+      expected: expected,
+      linelength: 80,
+      configuration: configuration
+    )
+  }
+
+  func testLoneAttributeStaysOnDeclarationLineWhenAttached() {
+    let input = "@MainActor func load() {}"
+    let expected = """
+      @MainActor func load() {}
+
+      """
+    var configuration = Configuration.forTesting
+    configuration.lineBreakBetweenDeclarationAttributes = true
+    configuration.attachLoneDeclarationAttributes = true
+    assertPrettyPrintEqual(
+      input: input,
+      expected: expected,
+      linelength: 80,
+      configuration: configuration
+    )
+  }
+
+  func testLoneAttachedAttributeAbsorbsExistingLineBreak() {
+    // A discretionary newline between the attribute and its declaration is discarded so that the
+    // attribute attaches, matching the same input written on one line.
+    let input = """
+      @MainActor
+      func load() {}
+
+      """
+    let expected = """
+      @MainActor func load() {}
+
+      """
+    var configuration = Configuration.forTesting
+    configuration.lineBreakBetweenDeclarationAttributes = true
+    configuration.attachLoneDeclarationAttributes = true
+    assertPrettyPrintEqual(
+      input: input,
+      expected: expected,
+      linelength: 80,
+      configuration: configuration
+    )
+  }
+
+  func testLoneAttachedAttributeBreaksArgumentsWhenTooLong() {
+    // The attribute stays attached to the declaration; the overflow is absorbed by breaking the
+    // attribute's own argument list.
+    let input = "@available(iOS 17.0, macCatalyst 15.0, *) func f() {}"
+    let expected = """
+      @available(
+        iOS 17.0, macCatalyst 15.0, *
+      ) func f() {}
+
+      """
+    var configuration = Configuration.forTesting
+    configuration.lineBreakBetweenDeclarationAttributes = true
+    configuration.attachLoneDeclarationAttributes = true
+    assertPrettyPrintEqual(
+      input: input,
+      expected: expected,
+      linelength: 40,
+      configuration: configuration
+    )
+  }
+
+  func testMultipleAttributesBreakOnePerLine() {
+    let input = "@objc @IBAction func refresh() {}"
+    let expected = """
+      @objc
+      @IBAction
+      func refresh() {}
+
+      """
+    var configuration = Configuration.forTesting
+    configuration.lineBreakBetweenDeclarationAttributes = true
+    configuration.attachLoneDeclarationAttributes = true
+    assertPrettyPrintEqual(
+      input: input,
+      expected: expected,
+      linelength: 80,
+      configuration: configuration
+    )
+  }
 }

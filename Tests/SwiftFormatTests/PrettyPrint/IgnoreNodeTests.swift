@@ -395,11 +395,13 @@ final class IgnoreNodeTests: PrettyPrintTestCase {
 
       """
 
+    // The comment after the modifier is not a valid ignore directive, so the struct is still
+    // formatted. (The declaration is not indented relative to the modifier; a wrapped
+    // declaration no longer receives a continuation indent after a standalone modifier.)
     let expected =
       """
       public  // swift-format-ignore
-        struct MyStruct
-      {
+      struct MyStruct {
         var a: Foo = 3
       }
 
@@ -510,5 +512,73 @@ final class IgnoreNodeTests: PrettyPrintTestCase {
       """
 
     assertPrettyPrintEqual(input: input, expected: expected, linelength: 50)
+  }
+
+  func testIgnoreLastStatementOfSwitchCase() {
+    let input =
+      """
+      func f(x: Int) {
+        switch x {
+        case 1:
+          a()
+            // swift-format-ignore
+              b()
+            case 2:
+                c()
+        }
+      }
+
+      """
+
+    let expected =
+      """
+      func f(x: Int) {
+        switch x {
+        case 1:
+          a()
+          // swift-format-ignore
+          b()
+        case 2:
+          c()
+        }
+      }
+
+      """
+
+    assertPrettyPrintEqual(input: input, expected: expected, linelength: 80)
+  }
+
+  func testIgnoreLastStatementOfFinalSwitchCase() {
+    let input =
+      """
+      func f(x: Int) {
+        switch x {
+        case 1:
+                a()
+        case 2:
+          c()
+            // swift-format-ignore
+              d()
+          }
+      }
+
+      """
+
+    let expected =
+      """
+      func f(x: Int) {
+        switch x {
+        case 1:
+          a()
+        case 2:
+          c()
+          // swift-format-ignore
+          d()
+        }
+      }
+
+      """
+
+    assertPrettyPrintEqual(input: input, expected: expected, linelength: 80)
   }
 }
