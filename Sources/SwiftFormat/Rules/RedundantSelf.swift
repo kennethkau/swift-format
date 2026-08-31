@@ -32,7 +32,6 @@ import SwiftSyntax
 ///
 /// Format: The prefix is removed in the same pass that diagnoses it. A prefix with a comment
 ///         attached to it is diagnosed but left unchanged, so that the comment is preserved.
-
 @_spi(Rules)
 public final class RedundantSelf: SyntaxFormatRule {
   public override class var isOptIn: Bool { return true }

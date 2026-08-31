@@ -14,9 +14,11 @@ import Foundation
 import SwiftSyntax
 
 /// This class takes the raw source text and scans through it searching for comments that instruct
-/// the formatter to change the status of rules for the following node. The comments may include no
-/// rule names to affect all rules, a single rule name to affect that rule, or a comma delimited
-/// list of rule names to affect a number of rules. Ignore is the only supported operation.
+/// the formatter to change the status of rules. The comments may include no rule names to affect
+/// all rules, a single rule name to affect that rule, or a comma delimited list of rule names to
+/// affect a number of rules. Ignore is the only supported operation for the node- and file-level
+/// directives; the `swift-format-disable`/`swift-format-enable` family additionally supports
+/// blocks and line-scoped directives (see `DisableDirective`).
 ///
 ///   1. |  // swift-format-ignore
 ///   2. |  let a = 123
@@ -45,6 +47,16 @@ import SwiftSyntax
 ///   3. | class Foo { }
 ///   Ignores `RuleName` and `OtherRuleName` for the entire file (lines 2-3).
 ///
+///   1. |  // swift-format-disable
+///   2. |  let a = 123
+///   3. |  // swift-format-enable
+///   Disables all rules for the block spanning lines 2-2.
+///
+///   1. |  // swift-format-disable:next RuleName
+///   2. |  let a = 123
+///   Disables `RuleName` on line 2; `:this` and `:previous` scope to the directive's own line
+///   and the line before it.
+///
 /// The rules themselves reference RuleMask to see if it is disabled for the line it is currently
 /// examining.
 @_spi(Testing)
@@ -54,6 +66,10 @@ public class RuleMask {
 
   /// Map of rule names to list ranges in the source where the rule is ignored.
   private var ruleMap: [String: [SourceRange]] = [:]
+
+  /// Map of rule names to ranges where the rule was explicitly re-enabled inside an all-rules
+  /// disable block with `swift-format-enable: RuleName`.
+  private var reenabledRanges: [String: [SourceRange]] = [:]
 
   /// Used to compute line numbers of syntax nodes.
   private let sourceLocationConverter: SourceLocationConverter
@@ -74,10 +90,22 @@ public class RuleMask {
     visitor.walk(node)
     allRulesIgnoredRanges = visitor.allRulesIgnoredRanges
     ruleMap = visitor.ruleMap
+
+    let sweeper = DisableDirectiveSweeper(sourceLocationConverter: sourceLocationConverter)
+    sweeper.walk(node)
+    applyDisableDirectiveEvents(sweeper.events, endOffset: node.totalLength.utf8Length)
   }
 
   /// Returns the `RuleState` for the given rule at the provided location.
   public func ruleState(_ rule: String, at location: SourceLocation) -> RuleState {
+    // A rule re-enabled inside an all-rules block is governed by the named disables that
+    // surround it, not by the block's remaining coverage of every other rule.
+    if let reenabled = reenabledRanges[rule], reenabled.contains(where: { $0.contains(location) }) {
+      if let ignoredRanges = ruleMap[rule], ignoredRanges.contains(where: { $0.contains(location) }) {
+        return .disabled
+      }
+      return .default
+    }
     if allRulesIgnoredRanges.contains(where: { $0.contains(location) }) {
       return .disabled
     }
@@ -86,12 +114,224 @@ public class RuleMask {
     }
     return .default
   }
+
+  /// Applies the disable/enable directive events found by the sweeper, in source order, to
+  /// compute the ranges where rules are disabled.
+  ///
+  /// Blocks are line-granular: a block opened by `swift-format-disable` covers from the start of
+  /// the directive's line, and one closed by `swift-format-enable` covers through the end of
+  /// that directive's line. An unterminated block runs to the end of the file.
+  private func applyDisableDirectiveEvents(_ events: [DisableDirectiveEvent], endOffset: Int) {
+    func lineStart(_ line: Int) -> Int {
+      sourceLocationConverter.position(ofLine: line, column: 1).utf8Offset
+    }
+    func lineEnd(_ line: Int) -> Int {
+      max(lineStart(line + 1) - 1, lineStart(line))
+    }
+    func sourceRange(_ startOffset: Int, _ endOffset: Int) -> SourceRange {
+      SourceRange(
+        start: sourceLocationConverter.location(for: AbsolutePosition(utf8Offset: startOffset)),
+        end: sourceLocationConverter.location(for: AbsolutePosition(utf8Offset: endOffset))
+      )
+    }
+
+    /// The offset where the open all-rules block started, or nil when none is open.
+    var allBlockStart: Int? = nil
+
+    /// The offsets where named-rule blocks started, outside any all-rules block.
+    var ruleBlockStarts: [String: Int] = [:]
+
+    /// The offsets where rules were re-enabled inside the open all-rules block.
+    var reenabledStarts: [String: Int] = [:]
+
+    func closeRuleBlocks(at end: Int) {
+      for (name, start) in ruleBlockStarts {
+        ruleMap[name, default: []].append(sourceRange(start, max(end, start)))
+      }
+      ruleBlockStarts.removeAll()
+    }
+    func closeReenabled(at end: Int) {
+      for (name, start) in reenabledStarts {
+        reenabledRanges[name, default: []].append(sourceRange(start, max(end, start)))
+      }
+      reenabledStarts.removeAll()
+    }
+
+    for event in events.sorted(by: { $0.offset < $1.offset }) {
+      let start = lineStart(event.line)
+      let end = lineEnd(event.line)
+
+      switch event.effect {
+      case .disableAll:
+        if allBlockStart == nil {
+          // An all-rules block subsumes the open named blocks and re-enables.
+          closeRuleBlocks(at: max(start - 1, 0))
+          closeReenabled(at: max(start - 1, 0))
+          allBlockStart = start
+        }
+      case .disableRules(let rules):
+        if allBlockStart == nil {
+          for rule in rules where ruleBlockStarts[rule] == nil {
+            ruleBlockStarts[rule] = start
+          }
+        } else {
+          // Re-disabling a rule inside the all-rules block cancels its re-enablement.
+          for rule in rules {
+            if let reenabledStart = reenabledStarts.removeValue(forKey: rule) {
+              reenabledRanges[rule, default: []].append(
+                sourceRange(reenabledStart, max(start - 1, reenabledStart))
+              )
+            }
+          }
+        }
+      case .enableAll:
+        if let blockStart = allBlockStart {
+          allRulesIgnoredRanges.append(sourceRange(blockStart, end))
+          allBlockStart = nil
+        }
+        closeRuleBlocks(at: end)
+        closeReenabled(at: end)
+      case .enableRules(let rules):
+        if allBlockStart == nil {
+          for rule in rules {
+            if let blockStart = ruleBlockStarts.removeValue(forKey: rule) {
+              ruleMap[rule, default: []].append(sourceRange(blockStart, end))
+            }
+          }
+        } else {
+          for rule in rules where reenabledStarts[rule] == nil {
+            reenabledStarts[rule] = start
+          }
+        }
+      case .lineScope(let scope, let rules):
+        let targetLine: Int
+        switch scope {
+        case .next: targetLine = event.line + 1
+        case .this: targetLine = event.line
+        case .previous: targetLine = event.line - 1
+        }
+        guard targetLine >= 1 else { break }
+        let scopeRange = sourceRange(lineStart(targetLine), lineEnd(targetLine))
+        if rules.isEmpty {
+          allRulesIgnoredRanges.append(scopeRange)
+        } else {
+          for rule in rules {
+            ruleMap[rule, default: []].append(scopeRange)
+          }
+        }
+      }
+    }
+
+    // An unterminated block runs to the end of the file.
+    if let blockStart = allBlockStart {
+      allRulesIgnoredRanges.append(sourceRange(blockStart, endOffset))
+    }
+    closeRuleBlocks(at: endOffset)
+    closeReenabled(at: endOffset)
+  }
 }
 
 extension SourceRange {
   /// Returns whether the range includes the given location.
   fileprivate func contains(_ location: SourceLocation) -> Bool {
     return start.offset <= location.offset && end.offset >= location.offset
+  }
+}
+
+/// One `swift-format-disable`/`swift-format-enable` directive comment found in the source.
+private struct DisableDirectiveEvent {
+  /// What the directive instructs.
+  let effect: DisableDirective.Effect
+
+  /// The line the directive comment sits on.
+  let line: Int
+
+  /// The byte offset of the directive comment, which orders events in source order.
+  let offset: Int
+}
+
+/// A syntax visitor that collects `swift-format-disable`/`swift-format-enable` directive events
+/// with the line each comment sits on.
+///
+/// Directives are recognized wherever they are syntactically recognizable — the same set of
+/// points the pretty printer's `DisableRegionCollector` uses, so the two never disagree: the
+/// preceding trivia of statement-level items (`CodeBlockItem` and `MemberBlockItem` nodes,
+/// including directives trailing code on the previous line), plus the leading trivia of the
+/// closing brace of code and member blocks (so a block opened inside a declaration can be
+/// closed on the line before `}`) and of the end-of-file token.
+private final class DisableDirectiveSweeper: SyntaxVisitor {
+  /// Computes source locations and ranges for syntax nodes in a source file.
+  private let sourceLocationConverter: SourceLocationConverter
+
+  /// The directive events found so far, in the order the walk encountered them; sort by offset
+  /// before use, because trivia attached to enclosing structure (closing braces) is visited
+  /// before the items that precede it in the source.
+  var events: [DisableDirectiveEvent] = []
+
+  init(sourceLocationConverter: SourceLocationConverter) {
+    self.sourceLocationConverter = sourceLocationConverter
+    super.init(viewMode: .sourceAccurate)
+  }
+
+  // MARK: - Syntax Visitation Methods
+
+  override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind {
+    collect(from: node.endOfFileToken.allPrecedingTrivia, of: node.endOfFileToken)
+    return .visitChildren
+  }
+
+  override func visit(_ node: CodeBlockItemSyntax) -> SyntaxVisitorContinueKind {
+    collectFromAllPrecedingTrivia(of: node)
+    return .visitChildren
+  }
+
+  override func visit(_ node: MemberBlockItemSyntax) -> SyntaxVisitorContinueKind {
+    collectFromAllPrecedingTrivia(of: node)
+    return .visitChildren
+  }
+
+  override func visit(_ node: CodeBlockSyntax) -> SyntaxVisitorContinueKind {
+    collect(from: node.rightBrace.leadingTrivia, of: node.rightBrace)
+    return .visitChildren
+  }
+
+  override func visit(_ node: MemberBlockSyntax) -> SyntaxVisitorContinueKind {
+    collect(from: node.rightBrace.leadingTrivia, of: node.rightBrace)
+    return .visitChildren
+  }
+
+  // MARK: - Helper Methods
+
+  /// Records the directives in the preceding trivia of a statement-level item.
+  private func collectFromAllPrecedingTrivia(of item: some SyntaxProtocol) {
+    guard let token = item.firstToken(viewMode: .sourceAccurate) else {
+      return
+    }
+    collect(
+      from: token.allPrecedingTrivia,
+      of: token
+    )
+  }
+
+  /// Records the directives in the given trivia, anchored at the following token.
+  private func collect(from trivia: Trivia, of token: TokenSyntax) {
+    for comment in DisableDirective.lineComments(
+      in: trivia,
+      endingAt: token.positionAfterSkippingLeadingTrivia.utf8Offset
+    ) {
+      record(comment: comment.text, offset: comment.startOffset)
+    }
+  }
+
+  /// Records an event for the given comment when it is a disable/enable directive.
+  private func record(comment text: String, offset: Int) {
+    guard let effect = DisableDirective.match(commentText: text) else {
+      return
+    }
+    let line = sourceLocationConverter.location(for: AbsolutePosition(utf8Offset: offset)).line
+    events.append(
+      DisableDirectiveEvent(effect: effect, line: line, offset: offset)
+    )
   }
 }
 

@@ -22,6 +22,7 @@ add_executable(swift-format
   Subcommands/LintFormatOptions.swift
   Subcommands/PerformanceMeasurement.swift
   Utilities/Diagnostic.swift
+  Utilities/DiagnosticReporter.swift
   Utilities/DiagnosticsEngine.swift
   Utilities/FileHandleTextOutputStream.swift
   Utilities/StderrDiagnosticPrinter.swift

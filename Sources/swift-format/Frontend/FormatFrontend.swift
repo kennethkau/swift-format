@@ -13,6 +13,7 @@
 import Foundation
 import SwiftDiagnostics
 @_spi(Internal) import SwiftFormat
+@_spi(ExperimentalLanguageFeatures) import SwiftParser
 import SwiftSyntax
 
 /// The frontend for formatting operations.
@@ -25,6 +26,10 @@ class FormatFrontend: Frontend {
 
   /// Whether to print a unified diff of formatting changes instead of writing files.
   private let diff: Bool
+
+  /// Whether to verify that the formatted output is semantically equivalent to the input
+  /// before it is written, reported, or printed.
+  private let verify: Bool
 
   /// The paths of files that would be reformatted and their diffs, for `--check`/`--diff` mode.
   ///
@@ -44,11 +49,13 @@ class FormatFrontend: Frontend {
     lintFormatOptions: LintFormatOptions,
     inPlace: Bool,
     check: Bool = false,
-    diff: Bool = false
+    diff: Bool = false,
+    verify: Bool = false
   ) {
     self.inPlace = inPlace
     self.check = check
     self.diff = diff
+    self.verify = verify
     super.init(configurationOptions: configurationOptions, lintFormatOptions: lintFormatOptions)
   }
 
@@ -122,7 +129,7 @@ class FormatFrontend: Frontend {
     }
     var stdoutStream = FileHandleTextOutputStream(FileHandle.standardOutput)
     do {
-      if inPlace || check || diff {
+      if inPlace || check || diff || verify {
         var buffer = ""
         try formatter.format(
           source: source,
@@ -133,7 +140,12 @@ class FormatFrontend: Frontend {
           parsingDiagnosticHandler: diagnosticHandler
         )
 
+        // Unchanged bytes need no equivalence check.
         if buffer != source {
+          guard verifyFormattedOutput(source: source, formatted: buffer, url: url) else {
+            // The output may be broken; never write, report, or print it.
+            return
+          }
           if check || diff {
             resultsLock.lock()
             wouldReformatPaths.append(url.relativePath)
@@ -150,10 +162,13 @@ class FormatFrontend: Frontend {
             collectedDiffs.append((path: url.relativePath, text: text))
             resultsLock.unlock()
           }
+          if inPlace {
+            let bufferData = buffer.data(using: .utf8)!  // Conversion to UTF-8 cannot fail
+            try bufferData.write(to: url, options: .atomic)
+          }
         }
-        if inPlace, buffer != source {
-          let bufferData = buffer.data(using: .utf8)!  // Conversion to UTF-8 cannot fail
-          try bufferData.write(to: url, options: .atomic)
+        if !inPlace && !check && !diff {
+          stdoutStream.write(buffer)
         }
       } else {
         try formatter.format(
@@ -187,5 +202,56 @@ class FormatFrontend: Frontend {
     } catch {
       diagnosticsEngine.emitError("Unable to format \(url.relativePath): \(error.localizedDescription).")
     }
+  }
+
+  /// Verifies the formatted output against the input when `--verify` was requested, emitting
+  /// an error for each mismatch. Returns whether the output is safe to write, report, or print.
+  func verifyFormattedOutput(source: String, formatted: String, url: URL) -> Bool {
+    guard verify else {
+      return true
+    }
+
+    // The format pass's experimental parser features must be enabled here too, or source that
+    // needs them would re-parse into error trees.
+    var languageFeatures: Parser.LanguageFeatures = []
+    for featureName in lintFormatOptions.experimentalFeatures {
+      guard let feature = Parser.LanguageFeatures(name: featureName) else {
+        diagnosticsEngine.emitError(
+          "Verification failed for \(url.relativePath): experimental feature '\(featureName)' is not recognized"
+        )
+        return false
+      }
+      languageFeatures.formUnion(feature)
+    }
+
+    let originalTree: SourceFileSyntax
+    let formattedTree: SourceFileSyntax
+    do {
+      originalTree = try SyntaxVerifier.parseFolded(source, languageFeatures: languageFeatures)
+      formattedTree = try SyntaxVerifier.parseFolded(formatted, languageFeatures: languageFeatures)
+    } catch {
+      diagnosticsEngine.emitError(
+        "Verification failed for \(url.relativePath): could not re-parse the source for comparison: \(error.localizedDescription)"
+      )
+      return false
+    }
+
+    let mismatches = SyntaxVerifier.verify(original: originalTree, formatted: formattedTree)
+    guard !mismatches.isEmpty else {
+      return true
+    }
+
+    let converter = SourceLocationConverter(fileName: url.relativePath, tree: formattedTree)
+    for mismatch in mismatches {
+      let location = mismatch.formattedOffset.map {
+        converter.location(for: AbsolutePosition(utf8Offset: $0))
+      }
+      let site = mismatch.pathDescription.isEmpty ? "" : " at \(mismatch.pathDescription)"
+      diagnosticsEngine.emitError(
+        "Verification failed for \(url.relativePath): formatted output is not equivalent to the input\(site): \(mismatch.description)",
+        location: location
+      )
+    }
+    return false
   }
 }

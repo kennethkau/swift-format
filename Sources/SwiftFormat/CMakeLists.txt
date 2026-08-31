@@ -21,6 +21,7 @@ add_library(SwiftFormat
   API/SwiftLinter.swift
   Core/Attributes+Convenience.swift
   Core/Context.swift
+  Core/DisableDirectives.swift
   Core/DocumentationComment.swift
   Core/DocumentationCommentText.swift
   Core/Finding+Convenience.swift
@@ -115,7 +116,9 @@ add_library(SwiftFormat
   Utilities/FileIterator.swift
   Utilities/GitIgnorePattern.swift
   Utilities/IgnoreManager.swift
-  Utilities/URL+isRoot.swift)
+  Utilities/SyntaxEquivalence.swift
+  Utilities/URL+isRoot.swift
+  Utilities/UnifiedDiff.swift)
 target_link_libraries(SwiftFormat PUBLIC
   SwiftMarkdown::Markdown
   SwiftSyntax::SwiftSyntax

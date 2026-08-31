@@ -212,6 +212,10 @@ class Frontend {
   /// The diagnostic engine to which warnings and errors will be emitted.
   final let diagnosticsEngine: DiagnosticsEngine
 
+  /// The machine-readable reporter selected with `--reporter`, or nil when diagnostics take the
+  /// default human-readable form on standard error.
+  final let diagnosticReporter: DiagnosticReporter?
+
   /// Options that control the tool's configuration.
   final let configurationOptions: ConfigurationOptions
 
@@ -232,23 +236,50 @@ class Frontend {
 
   /// Creates a new frontend with the given options.
   ///
-  /// - Parameter lintFormatOptions: Options that apply during formatting or linting.
+  /// - Parameters:
+  ///   - lintFormatOptions: Options that apply during formatting or linting.
+  ///   - reporter: The machine-readable format in which diagnostics should be reported, which
+  ///     is written to standard output when the run finishes. When a reporter is selected — or
+  ///     files are processed in parallel — diagnostics are buffered and forwarded in sorted
+  ///     order by `flushDiagnostics()` so that concurrent processing cannot reorder them.
   init(
     configurationOptions: ConfigurationOptions,
     lintFormatOptions: LintFormatOptions,
-    treatWarningsAsErrors: Bool = false
+    treatWarningsAsErrors: Bool = false,
+    reporter: DiagnosticReporter.Kind = .default
   ) {
     self.configurationOptions = configurationOptions
     self.lintFormatOptions = lintFormatOptions
 
+    let diagnosticReporter = reporter == .default ? nil : DiagnosticReporter(kind: reporter)
+    self.diagnosticReporter = diagnosticReporter
     self.diagnosticPrinter = StderrDiagnosticPrinter(
       colorMode: lintFormatOptions.colorDiagnostics.map { $0 ? .on : .off } ?? .auto
     )
+    // A selected reporter replaces the human-readable diagnostics rather than adding to them,
+    // so CI logs contain exactly one rendering of each finding.
+    let diagnosticHandlers: [(Diagnostic) -> Void]
+    if let diagnosticReporter {
+      diagnosticHandlers = [diagnosticReporter.consume]
+    } else {
+      diagnosticHandlers = [diagnosticPrinter.printDiagnostic]
+    }
     self.diagnosticsEngine = DiagnosticsEngine(
-      diagnosticsHandlers: [diagnosticPrinter.printDiagnostic],
-      treatWarningsAsErrors: treatWarningsAsErrors
+      diagnosticsHandlers: diagnosticHandlers,
+      treatWarningsAsErrors: treatWarningsAsErrors,
+      ordered: lintFormatOptions.parallel || diagnosticReporter != nil
     )
     self.configurationProvider = ConfigurationProvider(diagnosticsEngine: self.diagnosticsEngine)
+  }
+
+  /// Forwards buffered diagnostics in sorted order and writes the machine-readable report, when
+  /// one was requested.
+  ///
+  /// Must be called after `run()` has completed. Without `--parallel` or a `--reporter`, when
+  /// diagnostics were forwarded as they were emitted, this does nothing.
+  final func flushDiagnostics() {
+    diagnosticsEngine.flush()
+    diagnosticReporter?.finish()
   }
 
   /// Runs the linter or formatter over the inputs.
