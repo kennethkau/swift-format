@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 import ArgumentParser
+import Foundation
 
 extension SwiftFormatCommand {
   /// Formats one or more files containing Swift code.
@@ -29,6 +30,39 @@ extension SwiftFormatCommand {
     )
     var inPlace: Bool = false
 
+    /// Whether to check formatting without writing files.
+    ///
+    /// If specified, no files are written. The command exits with status 1 if any file would be
+    /// reformatted (printing the list of such files) or could not be certified as formatted —
+    /// including a file that does not parse while `--ignore-unparsable-files` skips it, since a
+    /// check gate cannot certify a file it could not parse — status 2 if an internal error
+    /// occurred, and status 0 if every file is already formatted.
+    @Flag(
+      name: .long,
+      help: """
+        Check formatting without writing files. Exits with status 1 if any file would be reformatted \
+        or could not be certified as formatted, or status 2 on error. Unparsable files are an error \
+        unless '--ignore-unparsable-files' is also given, in which case they are skipped but still \
+        count as not certified for the exit code.
+        """
+    )
+    var check: Bool = false
+
+    /// Whether to print a unified diff of formatting changes instead of writing files.
+    ///
+    /// If specified, no files are written. The exit codes match `--check`: status 1 if any file
+    /// would be reformatted or could not be certified as formatted, status 2 if an internal
+    /// error occurred, and status 0 if every file is already formatted and none were skipped
+    /// as unparsable.
+    @Flag(
+      name: .long,
+      help: """
+        Print a unified diff of the formatting changes instead of writing files. Exit codes match \
+        '--check'.
+        """
+    )
+    var diff: Bool = false
+
     @OptionGroup()
     var configurationOptions: ConfigurationOptions
 
@@ -42,6 +76,12 @@ extension SwiftFormatCommand {
       if inPlace && formatOptions.paths.isEmpty {
         throw ValidationError("'--in-place' is only valid when formatting files")
       }
+      if (check || diff) && inPlace {
+        throw ValidationError("'--check' and '--diff' cannot be combined with '--in-place'")
+      }
+      if check && diff {
+        throw ValidationError("'--check' and '--diff' are mutually exclusive")
+      }
     }
 
     func run() throws {
@@ -49,10 +89,45 @@ extension SwiftFormatCommand {
         let frontend = FormatFrontend(
           configurationOptions: configurationOptions,
           lintFormatOptions: formatOptions,
-          inPlace: inPlace
+          inPlace: inPlace,
+          check: check,
+          diff: diff
         )
         frontend.run()
-        if frontend.diagnosticsEngine.hasErrors { throw ExitCode.failure }
+
+        if check || diff {
+          frontend.printCollectedResults()
+          let wouldReformat = frontend.wouldReformatCount
+          if wouldReformat > 0 {
+            let stderrStream = FileHandleTextOutputStream(FileHandle.standardError)
+            if wouldReformat == 1 {
+              stderrStream.write("1 file would be reformatted.\n")
+            } else {
+              stderrStream.write("\(wouldReformat) files would be reformatted.\n")
+            }
+          }
+          let uncertified = frontend.uncertifiedCount
+          if uncertified > 0 {
+            let stderrStream = FileHandleTextOutputStream(FileHandle.standardError)
+            if uncertified == 1 {
+              stderrStream.write("1 file could not be parsed and was not certified as formatted.\n")
+            } else {
+              stderrStream.write("\(uncertified) files could not be parsed and were not certified as formatted.\n")
+            }
+          }
+        }
+
+        // Exit code contract (matches Black/rustfmt conventions), shared by `--check` and
+        // `--diff`: 0 = nothing would change, 1 = some file would be reformatted or could not be
+        // certified as formatted (skipped unparsable files under --ignore-unparsable-files),
+        // 2 = an internal error occurred. Without either flag: 0 = success (regardless of
+        // changes), 1 = an error occurred.
+        if frontend.diagnosticsEngine.hasErrors {
+          throw (check || diff) ? ExitCode(2) : ExitCode.failure
+        }
+        if (check || diff) && (frontend.wouldReformatCount > 0 || frontend.uncertifiedCount > 0) {
+          throw ExitCode.failure
+        }
       }
     }
   }
