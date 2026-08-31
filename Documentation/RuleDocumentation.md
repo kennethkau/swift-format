@@ -14,6 +14,7 @@ Here's the list of available rules:
 - [AlwaysUseLiteralForEmptyCollectionInit](#AlwaysUseLiteralForEmptyCollectionInit)
 - [AlwaysUseLowerCamelCase](#AlwaysUseLowerCamelCase)
 - [AmbiguousTrailingClosureOverload](#AmbiguousTrailingClosureOverload)
+- [AttributeOrder](#AttributeOrder)
 - [AvoidRetroactiveConformances](#AvoidRetroactiveConformances)
 - [BeginDocumentationCommentWithOneLineSummary](#BeginDocumentationCommentWithOneLineSummary)
 - [BlankLinePolicy](#BlankLinePolicy)
@@ -22,6 +23,7 @@ Here's the list of available rules:
 - [FileScopedDeclarationPrivacy](#FileScopedDeclarationPrivacy)
 - [FullyIndirectEnum](#FullyIndirectEnum)
 - [GroupNumericLiterals](#GroupNumericLiterals)
+- [GroupedDeclarations](#GroupedDeclarations)
 - [IdentifiersMustBeASCII](#IdentifiersMustBeASCII)
 - [NeverForceUnwrap](#NeverForceUnwrap)
 - [NeverUseForceTry](#NeverUseForceTry)
@@ -42,6 +44,7 @@ Here's the list of available rules:
 - [OneVariableDeclarationPerLine](#OneVariableDeclarationPerLine)
 - [OnlyOneTrailingClosureArgument](#OnlyOneTrailingClosureArgument)
 - [OrderedImports](#OrderedImports)
+- [RedundantSelf](#RedundantSelf)
 - [ReplaceForEachWithForLoop](#ReplaceForEachWithForLoop)
 - [ReturnVoidInsteadOfEmptyTuple](#ReturnVoidInsteadOfEmptyTuple)
 - [SwiftTestingNamingConventions](#SwiftTestingNamingConventions)
@@ -100,6 +103,28 @@ Lint: If two overloaded functions with one closure parameter appear in the same 
       error is raised.
 
 `AmbiguousTrailingClosureOverload` is a linter-only rule.
+
+### AttributeOrder
+
+Sorts order-insensitive declaration attributes into a fixed order.
+
+Only attributes from a fixed allowlist of compiler-defined, order-insensitive attributes are
+reordered — availability (`@available`), concurrency and isolation (`@MainActor`,
+`@preconcurrency`, `@Sendable`), introspection (`@nonobjc`, `@objc`, `@_spi`), optimization
+(`@frozen`, `@inlinable`, `@usableFromInline`), and ergonomics (`@discardableResult`,
+`@dynamicMemberLookup`), in the order listed here. Anything
+else — property wrappers, macro attributes (whose expansion order is their source order),
+and `#if` regions inside the attribute list — is a barrier: attributes are sorted only
+within a maximal run of consecutive allowlisted attributes, so nothing ever moves across a
+barrier. Attributes of `import` declarations and of function parameters are never touched.
+
+Lint: An attribute list whose canonical run order differs from the source order yields one
+      lint error on the first attribute of the affected run.
+
+Format: The allowlisted runs are sorted in place. A run containing a comment on any of its
+        attached to them is diagnosed but left as written.
+
+`AttributeOrder` rule can format your code automatically.
 
 ### AvoidRetroactiveConformances
 
@@ -220,6 +245,27 @@ these could be reevaluated.
 TODO: Handle floating point literals.
 
 `GroupNumericLiterals` rule can format your code automatically.
+
+### GroupedDeclarations
+
+Requires that like-kind declarations in a type or extension body are grouped together.
+
+Reordering declarations is not always safe: reordering stored properties changes
+initialization order, and reordering enum cases changes the order produced by `CaseIterable`.
+This rule therefore does not sort declarations. It checks that the properties, initializers
+and deinitializers, methods, nested types, and enum cases of a body each form one contiguous
+group, and it leaves the order within each group unchanged. A declaration that starts a
+second group of its kind — after a declaration of another kind appeared in between — yields
+a finding.
+
+This rule is lint-only: it never rewrites the tree, so it cannot change program
+behavior. Members the rule does not classify — `#if` regions, subscripts, associated types,
+macro declarations, and placeholder or error declarations — are neutral: they neither break
+a run nor are required to be grouped.
+
+Lint: A declaration that restarts a like-kind run yields a lint error.
+
+`GroupedDeclarations` is a linter-only rule.
 
 ### IdentifiersMustBeASCII
 
@@ -471,6 +517,11 @@ Lint: If an import appears anywhere other than the beginning of the file it resi
 Format: Imports will be reordered and (optionally) grouped at the top of the file.
 
 `OrderedImports` rule can format your code automatically.
+
+### RedundantSelf
+
+
+`RedundantSelf` rule can format your code automatically.
 
 ### ReplaceForEachWithForLoop
 

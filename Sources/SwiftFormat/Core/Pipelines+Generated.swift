@@ -76,6 +76,14 @@ class LintPipeline: SyntaxVisitor {
     onVisitPost(rule: TypeNamesShouldBeCapitalized.self, for: node)
   }
 
+  override func visit(_ node: AttributeListSyntax) -> SyntaxVisitorContinueKind {
+    visitIfEnabled(AttributeOrder.visit, for: node)
+    return .visitChildren
+  }
+  override func visitPost(_ node: AttributeListSyntax) {
+    onVisitPost(rule: AttributeOrder.self, for: node)
+  }
+
   override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind {
     visitIfEnabled(AvoidRetroactiveConformances.visit, for: node)
     visitIfEnabled(SwiftTestingNamingConventions.visit, for: node)
@@ -410,6 +418,14 @@ class LintPipeline: SyntaxVisitor {
     onVisitPost(rule: UseLetInEveryBoundCaseVariable.self, for: node)
   }
 
+  override func visit(_ node: MemberAccessExprSyntax) -> SyntaxVisitorContinueKind {
+    visitIfEnabled(RedundantSelf.visit, for: node)
+    return .visitChildren
+  }
+  override func visitPost(_ node: MemberAccessExprSyntax) {
+    onVisitPost(rule: RedundantSelf.self, for: node)
+  }
+
   override func visit(_ node: MemberBlockItemListSyntax) -> SyntaxVisitorContinueKind {
     visitIfEnabled(DoNotUseSemicolons.visit, for: node)
     return .visitChildren
@@ -420,11 +436,13 @@ class LintPipeline: SyntaxVisitor {
 
   override func visit(_ node: MemberBlockSyntax) -> SyntaxVisitorContinueKind {
     visitIfEnabled(AmbiguousTrailingClosureOverload.visit, for: node)
+    visitIfEnabled(GroupedDeclarations.visit, for: node)
     visitIfEnabled(NoEmptyLinesOpeningClosingBraces.visit, for: node)
     return .visitChildren
   }
   override func visitPost(_ node: MemberBlockSyntax) {
     onVisitPost(rule: AmbiguousTrailingClosureOverload.self, for: node)
+    onVisitPost(rule: GroupedDeclarations.self, for: node)
     onVisitPost(rule: NoEmptyLinesOpeningClosingBraces.self, for: node)
   }
 
@@ -644,6 +662,7 @@ extension FormatPipeline {
   func rewrite(_ node: Syntax) -> Syntax {
     var node = node
     node = AlwaysUseLiteralForEmptyCollectionInit(context: context).apply(to: node)
+    node = AttributeOrder(context: context).apply(to: node)
     node = BlankLinePolicy(context: context).apply(to: node)
     node = DoNotUseSemicolons(context: context).apply(to: node)
     node = FileScopedDeclarationPrivacy(context: context).apply(to: node)
@@ -661,6 +680,7 @@ extension FormatPipeline {
     node = OneCasePerLine(context: context).apply(to: node)
     node = OneVariableDeclarationPerLine(context: context).apply(to: node)
     node = OrderedImports(context: context).apply(to: node)
+    node = RedundantSelf(context: context).apply(to: node)
     node = ReturnVoidInsteadOfEmptyTuple(context: context).apply(to: node)
     node = UseEarlyExits(context: context).apply(to: node)
     node = UseExplicitNilCheckInConditions(context: context).apply(to: node)
