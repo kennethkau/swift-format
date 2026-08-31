@@ -62,6 +62,7 @@ add_library(SwiftFormat
   Rules/AmbiguousTrailingClosureOverload.swift
   Rules/AvoidRetroactiveConformances.swift
   Rules/BeginDocumentationCommentWithOneLineSummary.swift
+  Rules/BlankLinePolicy.swift
   Rules/DoNotUseSemicolons.swift
   Rules/DontRepeatTypeInStaticProperties.swift
   Rules/FileScopedDeclarationPrivacy.swift
@@ -75,7 +76,7 @@ add_library(SwiftFormat
   Rules/NoAssignmentInExpressions.swift
   Rules/NoBlockComments.swift
   Rules/NoCasesWithOnlyFallthrough.swift
-  Rules/NoEmptyLineOpeningClosingBraces.swift
+  Rules/NoEmptyLinesOpeningClosingBraces.swift
   Rules/NoEmptyTrailingClosureParentheses.swift
   Rules/NoLabelsInCasePatterns.swift
   Rules/NoLeadingUnderscores.swift

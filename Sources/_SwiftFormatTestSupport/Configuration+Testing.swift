@@ -51,6 +51,7 @@ extension Configuration {
     config.indentBlankLines = false
     config.iterateToFixpoint = false
     config.orderedImports = OrderedImportsConfiguration()
+    config.blankLinePolicy = BlankLinePolicyConfiguration()
     config.swiftTestingNamingConventions = SwiftTestingNamingConventionsConfiguration()
     return config
   }
