@@ -16,7 +16,9 @@ swift run generate-swift-format
 
 If successful, this tool will update the files `Pipelines+Generated.swift`,
 `RuleNameCache+Generated.swift`, and `RuleRegistry+Generated.swift` in
-the `Sources/SwiftFormat/Core` directory.
+the `Sources/SwiftFormat/Core` directory, and `RuleDocumentation.md` in
+the `Documentation` directory (the latter is built from the rules' doc
+comments).
 
 ## Command Line Options for Debugging
 

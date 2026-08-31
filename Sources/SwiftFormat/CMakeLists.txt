@@ -60,15 +60,22 @@ add_library(SwiftFormat
   Rules/AlwaysUseLiteralForEmptyCollectionInit.swift
   Rules/AlwaysUseLowerCamelCase.swift
   Rules/AmbiguousTrailingClosureOverload.swift
+  Rules/AttributeOrder.swift
   Rules/AvoidRetroactiveConformances.swift
   Rules/BeginDocumentationCommentWithOneLineSummary.swift
+  Rules/BlankLinePolicy.swift
+  Rules/CanonicalDocComments.swift
+  Rules/CanonicalNumberLiterals.swift
+  Rules/CanonicalStringEscapes.swift
   Rules/DoNotUseSemicolons.swift
   Rules/DontRepeatTypeInStaticProperties.swift
+  Rules/FileHeader.swift
   Rules/FileScopedDeclarationPrivacy.swift
   Rules/FullyIndirectEnum.swift
-  Rules/GroupedDeclarations.swift
   Rules/GroupNumericLiterals.swift
+  Rules/GroupedDeclarations.swift
   Rules/IdentifiersMustBeASCII.swift
+  Rules/ModifierOrder.swift
   Rules/NeverForceUnwrap.swift
   Rules/NeverUseForceTry.swift
   Rules/NeverUseImplicitlyUnwrappedOptionals.swift
@@ -91,6 +98,7 @@ add_library(SwiftFormat
   Rules/RedundantParens.swift
   Rules/RedundantRawString.swift
   Rules/RedundantSelf.swift
+  Rules/ReflowComments.swift
   Rules/ReplaceForEachWithForLoop.swift
   Rules/ReturnVoidInsteadOfEmptyTuple.swift
   Rules/SwiftTestingNamingConventions.swift
